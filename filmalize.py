@@ -1,5 +1,21 @@
-import click
+"""A simple tool for converting video files.
+
+System Dependencies:
+    * ffmpeg
+
+Todo:
+    * Config File
+    * Convert command
+    * Filename whitelist?
+
+"""
+
 import os
+import subprocess
+import json
+
+import click
+
 
 def exclusive(ctx_params, exclusive_params, error_message):
     """Utility function for enforcing exclusivity between options.
@@ -62,7 +78,15 @@ def cli(ctx, file, directory, recursive):
 @click.pass_context
 def display(ctx):
     """Display information about video file(s)"""
-    click.echo(ctx.obj['FILES'])
+    for file in ctx.obj['FILES']:
+        probe_info = subprocess.run(['/usr/bin/ffprobe', '-v', 'error',
+            '-show_format', '-show_streams', '-of', 'json', file],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if not probe_info.returncode:
+            click.echo(json.loads(probe_info.stdout))
+        else:
+            click.echo('ffprobe warning - {}'.format(
+                probe_info.stderr.decode('utf-8').strip('\n')))
 
 
 @cli.command()
