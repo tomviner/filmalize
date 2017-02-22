@@ -11,8 +11,7 @@ Todo:
         * Raise error on ffmpeg error
         * Test Filename
     * display_file:
-        * Split up
-        * Test json
+        * Split up?
     * Tests
 
 """
@@ -24,7 +23,6 @@ import datetime
 
 import click
 import bitmath
-
 
 def exclusive(ctx_params, exclusive_params, error_message):
     """Utility function for enforcing exclusivity between options.
@@ -76,8 +74,12 @@ def display_file(file_info):
     """Utility function to display the salient information about a file.
 
     Args:
-        file_info (json): The information to parse and display.
-
+        file_info (json): json-formatted ffprobe results including at least
+            format and stream information.
+    Returns:
+        dict: A dictionary with keys that are the stream indexes from the
+            file_info and with values that are dictionaries containing
+            information about the respective streams specifications.
     """
 
     if 'tags' in file_info['format'] and 'title' in file_info['format']['tags']:
@@ -100,22 +102,26 @@ def display_file(file_info):
         file_description.append('Container: {}'.format(file_info['format']['format_name']))
     click.echo(' | '.join(file_description))
 
+    streams = {}
     for stream in file_info['streams']:
-        stream_header = []
-        if 'index' in stream:
-            stream_header.append('Stream {}:'.format(stream['index']))
+        index = stream['index']
+        stream_header = 'Stream {}:'.format(index)
+        streams[index] = {}
+
         stream_info = []
         if 'codec_type' in stream:
             stream_type = stream['codec_type']
             stream_info.append(stream_type)
+            streams[index]['type'] = stream_type
         if 'codec_name' in stream:
             stream_info.append(stream['codec_name'])
+            streams[index]['codec'] = stream['codec_name']
         if 'tags' in stream and 'language' in stream['tags']:
             stream_info.append(stream['tags']['language'])
         if 'disposition' in stream and 'default' in stream['disposition']:
             if stream['disposition']['default']:
                 stream_info.append('default')
-        click.echo('  ' + click.style(' '.join(stream_header), fg='green', bold=True) + ' '
+        click.echo('  ' + click.style(stream_header, fg='green', bold=True) + ' '
             + click.style(' '.join(stream_info), fg='yellow'))
 
         if 'tags' in stream and 'title' in stream['tags']:
@@ -132,6 +138,7 @@ def display_file(file_info):
             if 'bitrate' in stream:
                 bitrate = round(bitmath.Mib(bits=int(stream['bit_rate'])).value, 2)
                 stream_spcs.append('Bitrate: {}Mib/s'.format(bitrate))
+                streams[index]['bitrate'] = bitrate
             if 'field_order' in stream:
                 stream_specs.append('Scan: {}'.format(stream['field_order']))
         elif stream_type == 'audio':
@@ -140,9 +147,164 @@ def display_file(file_info):
             if 'bit_rate' in stream:
                 bitrate = round(bitmath.Kib(bits=int(stream['bit_rate'])).value)
                 stream_specs.append('Bitrate: {}Kib/s'.format(bitrate))
+                streams[index]['bitrate'] = bitrate
         if stream_specs:
             click.echo('    ' + ' | '.join(stream_specs))
 
+    return streams
+
+def yes_no(prompt):
+    """Utility function to ask the user a yes/no question."""
+
+    while True:
+        click.echo(prompt + ' [y/n]', nl=False)
+        c = click.getchar()
+        click.echo()
+        if c == 'y':
+            return True
+        elif c == 'n':
+            return False
+        else:
+            click.echo('Invalid input, try again...')
+
+def select_streams(input_streams):
+    """Function to ascertain which streams from the input file to include in
+        the output.
+
+    If there are only two streams, it assumes that they must be the streams
+    that we need. Otherwise, ask the user which streams to include.
+
+    Args:
+        input_streams (dict): A dictionary with keys that are the stream
+            indexes from the file_info and with values that are dictionaries
+            containing information about the respective streams specifications.
+    Returns:
+        list: The streams to include in the output
+
+    """
+
+    if len(input_streams.keys()) == 2:
+        return [0, 1]
+
+    acceptable_responses = input_streams.keys()
+    ask = 'Which streams would you like?'
+    prompt = ask + ' [{}]'.format(' '.join([str(r) for r in acceptable_responses]))
+    while True:
+        r = click.prompt(prompt)
+        responses = [int(response) for response in r.split(' ')]
+        acceptable, video, audio = True, False, False
+        for response in responses:
+            if response not in acceptable_responses:
+                acceptable = False
+                break
+            if input_streams[response]['type'] == 'audio':
+                audio = True
+            elif input_streams[response]['type'] == 'video':
+                video = True
+        if acceptable and audio and video:
+            return responses
+        else:
+            click.echo('Invalid input. Separate streams with a single space.')
+            click.echo('You must include at least one audio and one video stream.')
+
+def build_map_options(output_streams):
+    """Generate -map options for our conversion ffmpeg command from each
+        selected output stream.
+
+    Returns:
+        list: ffmpeg -map option for each selected output stream.
+
+    """
+
+    return [c for stream in output_streams for c in ['-map', '0:{}'.format(stream)]]
+
+def build_video_options(stream):
+    """Build option list for copying or transcoding video streams.
+
+    If the input stream is already h264, it is simply copied to the output.
+    Otherwise, the stream will be transcoded. If so, the user is offered the
+    option of specifying a crf, or accepting the default of 18.
+
+    Args:
+        stream (dict): A dictionary with spec information about the video
+            stream to be copied/transcoded to the output.
+
+    Returns:
+        list: ffmpeg options for copying or transcoding video streams
+
+    """
+    if 'codec' in stream and stream['codec'] == 'h264':
+        return ['-c:v', 'copy']
+    else:
+        if not yes_no('Video needs to be transcoded. Use default crf (18)?'):
+            while True:
+                f = click.prompt('Specify crf [0-51]')
+                if f.isdigit() and int(f) in range(52):
+                    crf = int(f)
+                    break
+                else:
+                    click.echo('Invalid input, try again...')
+        else:
+            crf = 18
+        return ['-c:v', 'libx264', '-preset', 'slow', '-crf', crf, '-pix_fmt', 'yuv420p']
+
+def build_audio_options(stream):
+    """Build option list for copying or transcoding audio streams.
+
+    If the input stream is already aac, it is simply copied to the output.
+    Otherwise, the stream will be transcoded. If the input stream's bitrate
+    cannot be detected, the user is offerred the  option of specifying a
+    bitrate, or accepting the default of 384kib/s.
+
+    Args:
+        stream (dict): A dictionary with spec information about the audio
+            stream to be copied/transcoded to the output.
+
+    Returns:
+        list: ffmpeg options for copying or transcoding audio streams
+
+    """
+    if 'codec' in stream and stream['codec'] == 'aac':
+        return ['-c:a', 'copy']
+    elif 'bitrate' in stream:
+        return ['-c:a', 'aac', '-b:a', '{}k'.format(stream['bitrate'])]
+    else:
+        click.echo('Audio needs to be transcoded, cannot determine existing bitrate.')
+        if not yes_no('Use default bitrate (384kib/s)?'):
+            while True:
+                r = click.prompt('Specify bitrate (just the number, units are kib/s)')
+                if r.isdigit():
+                    bitrate = int(r)
+                    break
+                else:
+                    click.echo('Invalid input, try again...')
+        else:
+            bitrate = 384
+        return ['-c:a', 'aac', '-b:a', '{}k'.format(bitrate)]
+
+def build_filename(input_filename):
+    """Build output file name.
+
+    Ask the user if they would like to change the output file name. Allow
+    them to specify one if they so desire.
+
+    Args:
+        input_filename (string)
+
+    Returns:
+        list: Wrapping one element; the output filename.
+
+    """
+    name = '.'.join(input_filename.split('.')[:-1])
+    if not yes_no('Use default output filename: {} (.mp4)?'.format(name)):
+        while True:
+            f = click.prompt('Specify filename (without extension)')
+            if f:
+                name = '\ '.join(f.split(' '))
+                break
+            else:
+                click.echo('You must specify a filename. Try again...')
+    return [name + '.mp4']
 
 @click.group()
 @click.option('-f', '--file', type=click.Path(exists=True), help='Specify a file.')
@@ -191,8 +353,20 @@ def convert(ctx):
     for file in ctx.obj['FILES']:
         file_info = probe_file(file)
         if file_info:
-            display_file(file_info)
-
+            input_streams = display_file(file_info)
+            if yes_no('Convert file?'):
+                output_streams = select_streams(input_streams)
+                output_command = ['ffmpeg', '-i', file]
+                output_command.extend(build_map_options(output_streams))
+                for stream in output_streams:
+                    if input_streams[stream]['type'] == 'video':
+                        output_command.extend(build_video_options(input_streams[stream]))
+                    elif input_streams[stream]['type'] == 'audio':
+                        output_command.extend(build_audio_options(input_streams[stream]))
+                    elif input_streams[stream]['type'] == 'audio':
+                        output_command.extend(['-c:s', 'mov_text'])
+                output_command.extend(build_filename(file.split('/')[-1]))
+                click.echo(' '.join(output_command))
 
 if __name__ == '__main__':
     cli(obj={})
