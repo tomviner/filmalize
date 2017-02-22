@@ -5,7 +5,6 @@ System Dependencies:
 
 Todo:
     * Config file
-    * Convert command
     * Filename whitelist?
     * probe_file:
         * Raise error on ffmpeg error
@@ -13,6 +12,8 @@ Todo:
     * display_file:
         * Split up?
     * Tests
+    * Status display / interrupts
+    * Specify metadata edits
 
 """
 
@@ -295,16 +296,18 @@ def build_filename(input_filename):
         list: Wrapping one element; the output filename.
 
     """
-    name = '.'.join(input_filename.split('.')[:-1])
+
+    filename = input_filename.split('/')[-1]
+    name = '.'.join(filename.split('.')[:-1])
     if not yes_no('Use default output filename: {} (.mp4)?'.format(name)):
         while True:
             f = click.prompt('Specify filename (without extension)')
             if f:
-                name = '\ '.join(f.split(' '))
+                name = f
                 break
             else:
                 click.echo('You must specify a filename. Try again...')
-    return [name + '.mp4']
+    return ['/'.join(input_filename.split('/')[:-1]) + '/' + name + '.mp4']
 
 @click.group()
 @click.option('-f', '--file', type=click.Path(exists=True), help='Specify a file.')
@@ -350,23 +353,29 @@ def display(ctx):
 def convert(ctx):
     """Convert video file(s)"""
 
+    processes = []
     for file in ctx.obj['FILES']:
         file_info = probe_file(file)
         if file_info:
             input_streams = display_file(file_info)
             if yes_no('Convert file?'):
                 output_streams = select_streams(input_streams)
-                output_command = ['ffmpeg', '-i', file]
-                output_command.extend(build_map_options(output_streams))
+                output_command = ['/usr/bin/ffmpeg', '-nostdin', '-v', 'quiet', '-y', '-i', file]
                 for stream in output_streams:
                     if input_streams[stream]['type'] == 'video':
                         output_command.extend(build_video_options(input_streams[stream]))
                     elif input_streams[stream]['type'] == 'audio':
                         output_command.extend(build_audio_options(input_streams[stream]))
-                    elif input_streams[stream]['type'] == 'audio':
+                    elif input_streams[stream]['type'] == 'subtitle':
                         output_command.extend(['-c:s', 'mov_text'])
-                output_command.extend(build_filename(file.split('/')[-1]))
-                click.echo(' '.join(output_command))
+                output_command.extend(build_map_options(output_streams))
+                output_command.extend(build_filename(file))
+                click.echo('Executing: {}'.format(' '.join(output_command)))
+                if yes_no('Proceed?'):
+                    processes.append(subprocess.Popen(output_command))
+
+    for p in processes:
+        p.wait()
 
 if __name__ == '__main__':
     cli(obj={})
