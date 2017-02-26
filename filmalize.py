@@ -13,6 +13,7 @@ Todo:
         * Split up?
     * Tests
     * Status display / interrupts
+    * External subtitle file
     * Specify metadata edits
 
 """
@@ -21,9 +22,532 @@ import os
 import subprocess
 import json
 import datetime
+import tempfile
+import time
 
 import click
 import bitmath
+import chardet
+
+class Error(Exception):
+    """Base class for filmalize Exceptions."""
+
+    pass
+
+class ProbeError(Error):
+    """Custom Exception for when ffprobe is unable to parse a file."""
+
+    def __init__(self, file_name, message=None):
+        self.file_name = file_name
+        self.message = message if message else ''
+
+class CancelProcessorError(Error):
+    """Custom Exception for when the user cancels processing a file."""
+
+    def __init__(self, file_name):
+        self.file_name = file_name
+
+class Container:
+    """Multimedia container file object."""
+
+    def __init__(self, file_name):
+        """Initialize container object.
+
+        First, attempt to probe the file with ffprobe by calling probe_file.
+        If the probe is succesful, finish instatiating instance variables by
+        calling parse_info to parse the results of the probe.
+
+        Args:
+            file_name (str): The file to represent.
+
+        """
+
+        self.file_info = self.probe_file(file_name)
+        self.subtitle_files = {}
+        self.parse_info()
+
+    def add_subtitles(self):
+        """Add an external subtitle file. Allow the user to set a custom
+        encoding."""
+
+        sub_file, encoding = self.add_sub_file()
+        while True:
+            c = multiple_choice('accept / retry / specify custom / cancel', 'Continue?',
+                ['a', 'r', 's', 'c'])
+            if c == 'a':
+                index = len(self.subtitle_files.keys()) + 1
+                self.subtitle_files[index] = SubtitleFile(index, sub_file, encoding)
+                break
+            elif c == 'r':
+                sub_file, encoding = self.add_sub_file()
+            elif c == 's':
+                while True:
+                    encoding = click.prompt('Enter custom encoding')
+                    if encoding:
+                        click.echo('Custom encoding specified: {}'.format(encoding))
+                        break
+                    else:
+                        click.echo('You must specify an encoding')
+            elif c == 'c':
+                break
+
+    def add_sub_file(self):
+        """Prompt the user to specify a subtitle file.
+
+        Use chardet to detect the character encoding. Display the detected
+        encoding and confidence to the user.
+
+        Returns:
+            string: The subtitle file name
+            string: The subtitle file encoding
+
+        """
+
+        sub_file = click.prompt('Enter subtitle file name', type=click.Path(exists=True,
+            dir_okay=False, readable=True))
+        with open(sub_file, mode='rb') as f:
+            line = f.readline()
+        detected = chardet.detect(line)
+        click.echo('Subtitle file encoding detected as {}, with {}% confidence'.format(
+            detected['encoding'], int(detected['confidence']) * 100))
+        return sub_file, detected['encoding']
+
+    def probe_file(self, file_name):
+        """Use ffprobe to extract information about a file.
+
+        Args:
+            file_name (str): The file to probe.
+
+        Returns:
+            json: Detailed file information from ffprobe.
+
+        Raises:
+            ProbeError: If ffprobe does not return cleanly.
+
+        """
+
+        self.file_name = file_name
+        probe_info = subprocess.run(['/usr/bin/ffprobe', '-v', 'error', '-show_format',
+            '-show_streams', '-of', 'json', self.file_name], stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE)
+        if probe_info.returncode:
+            raise ProbeError(file_name, probe_info.stderr.decode('utf-8').strip('\n'))
+        else:
+            return json.loads(probe_info.stdout)
+
+    def parse_info(self):
+        """Parse ffprobe results to finish building instance.
+
+        Instantiate Container instance variables, when available, using the json info from
+        probe_file, defaulting to None if not specified. Iterate over the streams,
+        instantiating Stream instances for each.
+
+        """
+
+        self.title, self.duration, self.size, self.bitrate, self.format = ['' for _ in range(5)]
+        self.miliseconds = 1
+        if 'tags' in self.file_info['format'] and 'title' in self.file_info['format']['tags']:
+            self.title = self.file_info['format']['tags']['title']
+        if 'duration' in self.file_info['format']:
+            duration = float(self.file_info['format']['duration'])
+            self.microseconds = int(duration * 1000000)
+            self.length = datetime.timedelta(seconds=round(duration, 0))
+        if 'size' in self.file_info['format']:
+            self.size = round(bitmath.MiB(bytes=int(self.file_info['format']['size'])).value, 2)
+        if 'bit_rate' in self.file_info['format']:
+            bits=int(self.file_info['format']['bit_rate'])
+            self.bitrate = round(bitmath.Mib(bits=bits).value, 2)
+        if 'format_name' in self.file_info['format']:
+            self.container_format = self.file_info['format']['format_name']
+
+        self.streams = {}
+        for stream in self.file_info['streams']:
+            self.streams[int(stream['index'])] = Stream(stream)
+
+
+    def display(self):
+        """Echo a pretty representation of the Container."""
+
+        if self.title:
+            click.echo(click.style('Title: {}'.format(self.title),fg='cyan'))
+        click.echo(click.style('File: {}'.format(self.file_name), fg='magenta'))
+
+        file_description = []
+        if self.length:
+            file_description.append('Length: {}'.format(self.length))
+        if self.size:
+            file_description.append('Size: {}MiB'.format(self.size))
+        if self.bitrate:
+            file_description.append('Bitrate: {}MiB/s'.format(self.bitrate))
+        if self.container_format:
+            file_description.append('Container: {}'.format(self.container_format))
+        click.echo(' | '.join(file_description))
+
+        for index, stream in self.streams.items():
+            stream.display()
+
+        for index, subtitle in self.subtitle_files.items():
+            subtitle.display()
+
+class Stream:
+    """Multimedia stream object."""
+
+    def __init__(self, stream_info):
+        """Initialize stream object.
+
+        Instantiate Stream instance variables, when available, using the info
+        passed in stream_info, defaulting to None if not specified.
+
+        Args:
+            stream_info (dict): Stream information as reported by ffprobe.
+
+        """
+
+        [self.type, self.name, self.language, self.default, self.title, self.resolution,
+            self.bitrate, self.scan, self.channels, self.bitrate, self.sub_file,
+            self.encoding] = [None for _ in range(12)]
+        self.index = stream_info['index']
+
+        if 'codec_type' in stream_info:
+            self.type = stream_info['codec_type']
+        if 'codec_name' in stream_info:
+            self.codec = stream_info['codec_name']
+        if 'tags' in stream_info and 'language' in stream_info['tags']:
+            self.language = stream_info['tags']['language']
+        if 'disposition' in stream_info and 'default' in stream_info['disposition']:
+            self.default = True if stream_info['disposition']['default'] else False
+
+        if 'tags' in stream_info and 'title' in stream_info['tags']:
+            self.title = stream_info['tags']['title']
+
+        if self.type == 'video':
+            if 'height' in stream_info and 'width' in stream_info:
+                self.resolution = str(stream_info['width']) + 'x' + str(stream_info['height'])
+            elif 'coded_height' in stream and 'coded_width' in stream:
+                width = str(stream_info['coded_width'])
+                height = str(stream_info['coded_height'])
+                self.resolution = width + 'x' + height
+            if 'bitrate' in stream_info:
+                self.bitrate = round(bitmath.Mib(bits=int(stream_info['bit_rate'])).value, 2)
+            if 'field_order' in stream_info:
+                self.scan = stream_info['field_order']
+        elif self.type == 'audio':
+            if 'channel_layout' in stream_info:
+                self.channels = stream_info['channel_layout']
+            if 'bit_rate' in stream_info:
+                bit_rate = round(bitmath.Kib(bits=int(stream_info['bit_rate'])).value)
+                self.bitrate = bit_rate
+        elif self.type == 'subtitle':
+            if 'sub_file' in stream_info:
+                self.sub_file = stream_info['sub_file']
+            if 'encoding' in stream_info:
+                self.encoding = stream_info['encoding']
+
+    def display(self):
+        """Echo a pretty representation of the stream."""
+
+        stream_header = 'Stream {}:'.format(self.index)
+        stream_info = []
+        if self.type:
+            stream_info.append(self.type)
+        if self.codec:
+            stream_info.append(self.codec)
+        if self.language:
+            stream_info.append(self.language)
+        if self.default:
+            stream_info.append('default')
+        click.echo('  ' + click.style(stream_header, fg='green', bold=True) + ' '
+            + click.style(' '.join(stream_info), fg='yellow'))
+
+        if self.title:
+            click.echo('    Title: {}'.format(self.title))
+
+        stream_specs = []
+        if self.type == 'video':
+            if self.resolution:
+                stream_specs.append('Resolution: {}'.format(self.resolution))
+            if self.bitrate:
+                stream_spcs.append('Bitrate: {}Mib/s'.format(self.bitrate))
+            if self.scan:
+                stream_specs.append('Scan: {}'.format(self.scan))
+        elif self.type == 'audio':
+            if self.channels:
+                stream_specs.append('Channels: {}'.format(self.channels))
+            if self.bitrate:
+                stream_specs.append('Bitrate: {}Kib/s'.format(self.bitrate))
+        elif self.type == 'subtitle':
+            if self.sub_file:
+                stream_specs.append('File: {}'.format(self.sub_file))
+            if self.encoding:
+                stream_specs.append('Encoding: {}'.format(self.encoding))
+        if stream_specs:
+            click.echo('    ' + ' | '.join(stream_specs))
+
+class SubtitleFile:
+    """Subtitle file object."""
+
+    def __init__(self, index, file_name, encoding):
+        self.index = index
+        self.file_name = file_name
+        self.encoding = encoding
+
+    def display(self):
+        """Echo a pretty representation of the subtitle file."""
+
+        click.echo(click.style('Subtitle File: {}'.format(self.file_name), fg='magenta'))
+        click.echo('  Index: {} | Encoding: {}'.format(self.index, self.encoding))
+
+class Processor:
+    """Container processor object."""
+
+    def __init__(self, container):
+        """Initialize Processor object.
+
+        Build a ffmpeg command to process the given Container. Prompt the
+        user for confirmation. The user may accept, decline, or retry.
+
+        Args:
+            container (Container): The container object to process.
+
+        Raises:
+            CancelProcessorError: If the user declines to process the
+                container.
+
+        """
+
+        self.container = container
+        self.temp_file = tempfile.NamedTemporaryFile()
+        self.output_command = self.build_command()
+        while True:
+            confirm = False
+            click.echo('Generated Command:')
+            click.echo(' '.join(self.output_command))
+            c = multiple_choice('yes / no / retry', 'Continue?', ['y', 'n', 'r'])
+            if c == 'y':
+                break
+            elif c == 'n':
+                raise CancelProcessorError(self.container.file_name)
+            elif c == 'r':
+                self.output_command = self.build_command()
+
+
+    def execute(self):
+        """Start processing the container."""
+
+        self.process = subprocess.Popen(self.output_command, stderr=subprocess.PIPE,
+            universal_newlines=True)
+
+    def build_command(self):
+        """Build the ffmpeg command to process this container.
+
+        Prompt the user to pick which streams to include, then generate
+        appropriate ffmpeg options to process those streams. Prompt the user
+        for an output filename.
+
+        Returns:
+            list: The ffmpeg command to process this container.
+
+        """
+
+        output_streams = [self.container.streams[s] for s in self.select_streams()]
+        command = ['/usr/bin/ffmpeg', '-nostdin', '-progress', self.temp_file.name, '-v', 'error',
+            '-y', '-i', self.container.file_name]
+        for index, subtitle in self.container.subtitle_files.items():
+            command.extend(['-i', subtitle.file_name])
+        self.audio_streams = 0
+        self.video_streams = 0
+        self.subtitle_streams = 0
+        for stream in output_streams:
+            if stream.type == 'video':
+                command.extend(self.add_video_options(stream))
+            elif stream.type == 'audio':
+                command.extend(self.add_audio_options(stream))
+            elif stream.type == 'subtitle':
+                command.extend(self.add_subtitle_options(stream))
+        for index, subtitle in self.container.subtitle_files.items():
+            command.extend(self.add_subtitle_file_options(subtitle))
+        command.extend(self.add_filename())
+        return command
+
+    def select_streams(self):
+        """Which streams from the input file does the user want in the output.
+
+        If there are only two streams, return those. Otherwise, ask the user
+        which streams to include.
+
+        Returns:
+            list: The streams to include in the output
+
+        """
+
+        if len(self.container.streams.keys()) == 2:
+            return [0, 1]
+
+        acceptable_responses = self.container.streams.keys()
+        ask = 'Which streams would you like?'
+        prompt = ask + ' [{}]'.format(' '.join([str(r) for r in acceptable_responses]))
+        while True:
+            responses = click.prompt(prompt).split(' ')
+            acceptable, video, audio = True, False, False
+            for r in responses:
+                if not r.isdigit():
+                    acceptable = False
+                    break
+                response = int(r)
+                if response not in acceptable_responses:
+                    acceptable = False
+                    break
+                if self.container.streams[response].type == 'audio':
+                    audio = True
+                elif self.container.streams[response].type == 'video':
+                    video = True
+            if acceptable and audio and video:
+                return [int(r) for r in responses]
+            else:
+                click.echo('Invalid input. Separate streams with a single space.')
+                click.echo('You must include at least one audio and one video stream.')
+
+    def add_video_options(self, stream):
+        """Add options for copying or transcoding a specified video stream to
+        the output_command.
+
+        If the input stream is already h264, it is simply copied to the output.
+        Otherwise, the stream will be transcoded. If so, the user is offered the
+        option of specifying a crf, or accepting the default of 18.
+
+        Args:
+            stream (Stream): Video Stream to be added to the output.
+
+        Returns:
+            list: The ffmpeg options for the given video stream.
+
+        """
+
+        command = ['-map', '0:{}'.format(stream.index)]
+        if stream.codec == 'h264':
+            command.extend(['-c:v:{}'.format(self.video_streams), 'copy'])
+        else:
+            click.echo('Stream {} (video) needs to be transcoded.'.format(stream.index))
+            if not yes_no('Use default crf (18)?'):
+                while True:
+                    f = click.prompt('Specify crf [0-51]')
+                    if f.isdigit() and int(f) in range(52):
+                        crf = int(f)
+                        break
+                    else:
+                        click.echo('Invalid input, try again...')
+            else:
+                crf = 18
+            command.extend(['-c:v:{}'.format(self.video_streams), 'libx264', '-preset', 'slow',
+                '-crf', crf, '-pix_fmt', 'yuv420p'])
+
+        self.video_streams += 1
+        return command
+
+    def add_audio_options(self, stream):
+        """Add options for copying or transcoding a specified audio stream to
+        the output_command.
+
+        If the input stream is already aac, it is simply copied to the output.
+        Otherwise, the stream will be transcoded. If the input stream's bitrate
+        cannot be detected, the user is offerred the  option of specifying a
+        bitrate, or accepting the default of 384kib/s.
+
+        Args:
+            stream (Stream): Audio Stream to be added to the output.
+
+        Returns:
+            list: The ffmpeg options for the given audio stream.
+
+        """
+
+        command = ['-map', '0:{}'.format(stream.index)]
+        if stream.codec == 'aac':
+            command.extend(['-c:a:{}'.format(self.audio_streams), 'copy'])
+        elif stream.bitrate:
+            bitrate = stream.bitrate
+            command.extend(['-c:a:{}'.format(self.audio_streams), 'aac', '-b:a',
+                '{}k'.format(bitrate)])
+        else:
+            click.echo('Stream {} (audio) needs to be transcoded.'.format(stream.index))
+            if not yes_no('Use default bitrate (384kib/s)?'):
+                while True:
+                    r = click.prompt('Specify bitrate (just the number, units are kib/s)')
+                    if r.isdigit():
+                        bitrate = int(r)
+                        break
+                    else:
+                        click.echo('Invalid input, try again...')
+            else:
+                bitrate = 384
+            command.extend(['-c:a:{}'.format(self.audio_streams), 'aac',
+                '-b:a:{}'.format(self.audio_streams), '{}k'.format(bitrate)])
+
+        self.audio_streams += 1
+        return command
+
+    def add_subtitle_options(self, stream):
+        """Add options for including a specified subtitle stream to the
+        output_command. Subtitles will be converted to the mov_text format.
+
+        Args:
+            stream (Stream): Subtitle Stream to be added to the output.
+
+        Returns:
+            list: The ffmpeg options for the given subtitle stream.
+
+        """
+
+        command = ['-map', '0:{}'.format(stream.index)]
+        command.extend(['-c:s:{}'.format(self.subtitle_streams), 'mov_text'])
+        self.subtitle_streams += 1
+        return command
+
+    def add_subtitle_file_options(self, subtitle):
+        """Add options for including a specified subtitle stream to the
+        output_command. Subtitles will be converted to the mov_text format.
+
+        Args:
+            subtitle (SubtitleFile): The subtitle file for which to add
+                options to the ffmpeg command.
+
+        Returns:
+            list: The ffmpeg options for the given subtitle file.
+
+        """
+
+        command = ['-map', '{}:0'.format(subtitle.index)]
+        command.extend(['-c:s:{}'.format(self.subtitle_streams), 'mov_text'])
+        self.subtitle_streams += 1
+        return command
+
+    def add_filename(self):
+        """Add output filename to the output_command.
+
+        Ask the user if they would like to change the output file name. Allow
+        them to specify one if they so desire.
+
+        Args:
+            input_filename (string)
+
+        Returns:
+            list: Comprising one element; the output filename.
+
+        """
+        input_filename = self.container.file_name
+        name = '.'.join(input_filename.split('/')[-1].split('.')[:-1])
+        if not yes_no('Use default output filename: {} (.mp4)?'.format(name)):
+            while True:
+                f = click.prompt('Specify filename (without extension)')
+                if f:
+                    name = f
+                    break
+                else:
+                    click.echo('You must specify a filename. Try again...')
+
+        output_name = ['/'.join(input_filename.split('/')[:-1]) + '/' + name + '.mp4']
+        return output_name
+
 
 def exclusive(ctx_params, exclusive_params, error_message):
     """Utility function for enforcing exclusivity between options.
@@ -51,109 +575,6 @@ def exclusive(ctx_params, exclusive_params, error_message):
     if sum([1 if ctx_params[p] else 0 for p in exclusive_params]) > 1:
         raise click.UsageError(error_message)
 
-def probe_file(file_name):
-    """Utility function, uses ffprobe to extract information about a file.
-
-    Args:
-        file_name (str): The file to probe.
-
-    Returns:
-        json: Detailed file information from ffprobe.
-        None: If ffprobe does not return cleanly.
-
-    """
-
-    probe_info = subprocess.run(['/usr/bin/ffprobe', '-v', 'error', '-show_format',
-        '-show_streams', '-of', 'json', file_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if probe_info.returncode:
-        click.echo('ffprobe warning - {}'.format(probe_info.stderr.decode('utf-8').strip('\n')))
-        return None
-    else:
-        return json.loads(probe_info.stdout)
-
-def display_file(file_info):
-    """Utility function to display the salient information about a file.
-
-    Args:
-        file_info (json): json-formatted ffprobe results including at least
-            format and stream information.
-    Returns:
-        dict: A dictionary with keys that are the stream indexes from the
-            file_info and with values that are dictionaries containing
-            information about the respective streams specifications.
-    """
-
-    if 'tags' in file_info['format'] and 'title' in file_info['format']['tags']:
-        click.echo(click.style('Title: {}'.format(file_info['format']['tags']['title']),
-            fg='cyan'))
-    if 'filename' in file_info['format']:
-        click.echo(click.style('File: {}'.format(file_info['format']['filename']), fg='magenta'))
-
-    file_description = []
-    if 'duration' in file_info['format']:
-        seconds = round(float(file_info['format']['duration']), 0)
-        file_description.append('Length: {}'.format(datetime.timedelta(seconds=seconds)))
-    if 'size' in file_info['format']:
-        length = round(bitmath.MiB(bytes=int(file_info['format']['size'])).value, 2)
-        file_description.append('Size: {}MiB'.format(length))
-    if 'bit_rate' in file_info['format']:
-        bitrate = round(bitmath.Mib(bits=int(file_info['format']['bit_rate'])).value, 2)
-        file_description.append('Bitrate: {}MiB/s'.format(bitrate))
-    if 'format_name' in file_info['format']:
-        file_description.append('Container: {}'.format(file_info['format']['format_name']))
-    click.echo(' | '.join(file_description))
-
-    streams = {}
-    for stream in file_info['streams']:
-        index = stream['index']
-        stream_header = 'Stream {}:'.format(index)
-        streams[index] = {}
-
-        stream_info = []
-        if 'codec_type' in stream:
-            stream_type = stream['codec_type']
-            stream_info.append(stream_type)
-            streams[index]['type'] = stream_type
-        if 'codec_name' in stream:
-            stream_info.append(stream['codec_name'])
-            streams[index]['codec'] = stream['codec_name']
-        if 'tags' in stream and 'language' in stream['tags']:
-            stream_info.append(stream['tags']['language'])
-        if 'disposition' in stream and 'default' in stream['disposition']:
-            if stream['disposition']['default']:
-                stream_info.append('default')
-        click.echo('  ' + click.style(stream_header, fg='green', bold=True) + ' '
-            + click.style(' '.join(stream_info), fg='yellow'))
-
-        if 'tags' in stream and 'title' in stream['tags']:
-            click.echo('    Title: {}'.format(stream['tags']['title']))
-
-        stream_specs = []
-        if stream_type == 'video':
-            if 'height' in stream and 'width' in stream:
-                resolution = str(stream['width']) + 'x' + str(stream['height'])
-                stream_specs.append('Resolution: {}'.format(resolution))
-            elif 'coded_height' in stream and 'coded_width' in stream:
-                resolution = str(stream['coded_width']) + 'x' + str(stream['coded_height'])
-                stream_specs.append('Resolution: {}'.format(resolution))
-            if 'bitrate' in stream:
-                bitrate = round(bitmath.Mib(bits=int(stream['bit_rate'])).value, 2)
-                stream_spcs.append('Bitrate: {}Mib/s'.format(bitrate))
-                streams[index]['bitrate'] = bitrate
-            if 'field_order' in stream:
-                stream_specs.append('Scan: {}'.format(stream['field_order']))
-        elif stream_type == 'audio':
-            if 'channel_layout' in stream:
-                stream_specs.append('Channels: {}'.format(stream['channel_layout']))
-            if 'bit_rate' in stream:
-                bitrate = round(bitmath.Kib(bits=int(stream['bit_rate'])).value)
-                stream_specs.append('Bitrate: {}Kib/s'.format(bitrate))
-                streams[index]['bitrate'] = bitrate
-        if stream_specs:
-            click.echo('    ' + ' | '.join(stream_specs))
-
-    return streams
-
 def yes_no(prompt):
     """Utility function to ask the user a yes/no question."""
 
@@ -168,150 +589,52 @@ def yes_no(prompt):
         else:
             click.echo('Invalid input, try again...')
 
-def select_streams(input_streams):
-    """Function to ascertain which streams from the input file to include in
-        the output.
+def multiple_choice(key, prompt, responses):
+    """Utility function to ask the user a multple choice question."""
 
-    If there are only two streams, it assumes that they must be the streams
-    that we need. Otherwise, ask the user which streams to include.
-
-    Args:
-        input_streams (dict): A dictionary with keys that are the stream
-            indexes from the file_info and with values that are dictionaries
-            containing information about the respective streams specifications.
-    Returns:
-        list: The streams to include in the output
-
-    """
-
-    if len(input_streams.keys()) == 2:
-        return [0, 1]
-
-    acceptable_responses = input_streams.keys()
-    ask = 'Which streams would you like?'
-    prompt = ask + ' [{}]'.format(' '.join([str(r) for r in acceptable_responses]))
     while True:
-        r = click.prompt(prompt)
-        responses = [int(response) for response in r.split(' ')]
-        acceptable, video, audio = True, False, False
-        for response in responses:
-            if response not in acceptable_responses:
-                acceptable = False
-                break
-            if input_streams[response]['type'] == 'audio':
-                audio = True
-            elif input_streams[response]['type'] == 'video':
-                video = True
-        if acceptable and audio and video:
-            return responses
+        click.echo('Key: {}'.format(key))
+        full_prompt = prompt + ' [{}]'.format('/'.join(responses))
+        click.echo(full_prompt, nl=False)
+        c = click.getchar()
+        click.echo()
+        if c in responses:
+            return c
         else:
-            click.echo('Invalid input. Separate streams with a single space.')
-            click.echo('You must include at least one audio and one video stream.')
+            click.echo('Invalid input, try again...')
 
-def build_map_options(output_streams):
-    """Generate -map options for our conversion ffmpeg command from each
-        selected output stream.
+def build_containers(file_list):
+    """Utility function to build a list of Container objets given a list of
+        filenames.
 
-    Returns:
-        list: ffmpeg -map option for each selected output stream.
-
-    """
-
-    return [c for stream in output_streams for c in ['-map', '0:{}'.format(stream)]]
-
-def build_video_options(stream):
-    """Build option list for copying or transcoding video streams.
-
-    If the input stream is already h264, it is simply copied to the output.
-    Otherwise, the stream will be transcoded. If so, the user is offered the
-    option of specifying a crf, or accepting the default of 18.
+    Note:
+        If a container fails to build as the result of a ffprobe error, that
+            error is echoed, and the building continues. If no containers are
+            built, return and empty list.
 
     Args:
-        stream (dict): A dictionary with spec information about the video
-            stream to be copied/transcoded to the output.
+        file_list (list): File names (str) to attempt to build into containers.
 
     Returns:
-        list: ffmpeg options for copying or transcoding video streams
-
-    """
-    if 'codec' in stream and stream['codec'] == 'h264':
-        return ['-c:v', 'copy']
-    else:
-        if not yes_no('Video needs to be transcoded. Use default crf (18)?'):
-            while True:
-                f = click.prompt('Specify crf [0-51]')
-                if f.isdigit() and int(f) in range(52):
-                    crf = int(f)
-                    break
-                else:
-                    click.echo('Invalid input, try again...')
-        else:
-            crf = 18
-        return ['-c:v', 'libx264', '-preset', 'slow', '-crf', crf, '-pix_fmt', 'yuv420p']
-
-def build_audio_options(stream):
-    """Build option list for copying or transcoding audio streams.
-
-    If the input stream is already aac, it is simply copied to the output.
-    Otherwise, the stream will be transcoded. If the input stream's bitrate
-    cannot be detected, the user is offerred the  option of specifying a
-    bitrate, or accepting the default of 384kib/s.
-
-    Args:
-        stream (dict): A dictionary with spec information about the audio
-            stream to be copied/transcoded to the output.
-
-    Returns:
-        list: ffmpeg options for copying or transcoding audio streams
-
-    """
-    if 'codec' in stream and stream['codec'] == 'aac':
-        return ['-c:a', 'copy']
-    elif 'bitrate' in stream:
-        return ['-c:a', 'aac', '-b:a', '{}k'.format(stream['bitrate'])]
-    else:
-        click.echo('Audio needs to be transcoded, cannot determine existing bitrate.')
-        if not yes_no('Use default bitrate (384kib/s)?'):
-            while True:
-                r = click.prompt('Specify bitrate (just the number, units are kib/s)')
-                if r.isdigit():
-                    bitrate = int(r)
-                    break
-                else:
-                    click.echo('Invalid input, try again...')
-        else:
-            bitrate = 384
-        return ['-c:a', 'aac', '-b:a', '{}k'.format(bitrate)]
-
-def build_filename(input_filename):
-    """Build output file name.
-
-    Ask the user if they would like to change the output file name. Allow
-    them to specify one if they so desire.
-
-    Args:
-        input_filename (string)
-
-    Returns:
-        list: Wrapping one element; the output filename.
+        list: Succesfully built containers.
 
     """
 
-    filename = input_filename.split('/')[-1]
-    name = '.'.join(filename.split('.')[:-1])
-    if not yes_no('Use default output filename: {} (.mp4)?'.format(name)):
-        while True:
-            f = click.prompt('Specify filename (without extension)')
-            if f:
-                name = f
-                break
-            else:
-                click.echo('You must specify a filename. Try again...')
-    return ['/'.join(input_filename.split('/')[:-1]) + '/' + name + '.mp4']
+    containers = []
+    for file in file_list:
+        try:
+            c = Container(file)
+            containers.append(c)
+        except ProbeError as e:
+            click.echo(click.style('Warning: Unable to process {}'.format(e.file_name), fg='red'))
+            click.echo(e.message)
+    return containers
 
 @click.group()
-@click.option('-f', '--file', type=click.Path(exists=True), help='Specify a file.')
-@click.option('-d', '--directory', type=click.Path(exists=True), help='Specify a directory.')
+@click.option('-f', '--file', type=click.Path(exists=True, dir_okay=False, readable=True),
+    help='Specify a file.')
+@click.option('-d', '--directory', type=click.Path(exists=True, file_okay=False, readable=True),
+    help='Specify a directory.')
 @click.option('-r', '--recursive', is_flag=True, help='Operate recursively.')
 @click.pass_context
 def cli(ctx, file, directory, recursive):
@@ -343,39 +666,54 @@ def cli(ctx, file, directory, recursive):
 def display(ctx):
     """Display information about video file(s)"""
 
-    for file in ctx.obj['FILES']:
-        file_info = probe_file(file)
-        if file_info:
-            display_file(file_info)
+    for container in build_containers(ctx.obj['FILES']):
+        container.display()
 
 @cli.command()
 @click.pass_context
 def convert(ctx):
     """Convert video file(s)"""
 
-    processes = []
-    for file in ctx.obj['FILES']:
-        file_info = probe_file(file)
-        if file_info:
-            input_streams = display_file(file_info)
-            if yes_no('Convert file?'):
-                output_streams = select_streams(input_streams)
-                output_command = ['/usr/bin/ffmpeg', '-nostdin', '-v', 'quiet', '-y', '-i', file]
-                for stream in output_streams:
-                    if input_streams[stream]['type'] == 'video':
-                        output_command.extend(build_video_options(input_streams[stream]))
-                    elif input_streams[stream]['type'] == 'audio':
-                        output_command.extend(build_audio_options(input_streams[stream]))
-                    elif input_streams[stream]['type'] == 'subtitle':
-                        output_command.extend(['-c:s', 'mov_text'])
-                output_command.extend(build_map_options(output_streams))
-                output_command.extend(build_filename(file))
-                click.echo('Executing: {}'.format(' '.join(output_command)))
-                if yes_no('Proceed?'):
-                    processes.append(subprocess.Popen(output_command))
+    containers = build_containers(ctx.obj['FILES'])
+    processors = []
+    for container in containers:
+        while True:
+            container.display()
+            c = multiple_choice('yes / no / add subtitles', 'Convert file?', ['y', 'n', 'a'])
+            if c == 'a':
+                container.add_subtitles()
+            if c == 'y':
+                try:
+                    processor = Processor(container)
+                    processor.execute()
+                    processors.append(processor)
+                except CancelProcessorError as e:
+                    click.echo(click.style('Warning: Cancelled converting {}'.format(e.file_name),
+                        fg='red'))
+            if c in ['y', 'n']:
+                break
 
-    for p in processes:
-        p.wait()
+    while processors:
+        for processor in processors:
+            if processor.process.poll() != None:
+                if processor.process.returncode:
+                    click.echo(click.style('Warning: ffmpeg error while converting {}'.format(
+                        processor.container.file_name), fg='red'))
+                    click.echo(processor.process.communicate()[1].strip('\n'))
+                processors.remove(processor)
+            else:
+                with open(processor.temp_file.name, 'r') as status:
+                    line_list = status.readlines()
+                ms = 0
+                for line in reversed(line_list):
+                    if line.split('=')[0] == 'out_time_ms':
+                        if line.split('=')[1].strip('\n').isdigit():
+                            ms = int(line.split('=')[1])
+                            break
+                if ms:
+                    percent = round(100 * (ms / processor.container.microseconds), 1)
+                    click.echo('{}% - {}'.format(percent, processor.container.file_name))
+        time.sleep(1)
 
 if __name__ == '__main__':
     cli(obj={})
