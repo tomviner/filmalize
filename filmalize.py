@@ -20,6 +20,7 @@ import json
 import datetime
 import tempfile
 import time
+import pathlib
 
 import click
 import bitmath
@@ -68,8 +69,6 @@ class Container:
         """
 
         self.file_name = file_name
-        self.just_file_name = file_name.split('/')[-1]
-        self.path = '/'.join(file_name.split('/')[:-1])
         self.title, self.duration, self.size, self.bitrate, self.format = ['' for _ in range(5)]
         self.microseconds = 1
         self.streams, self.subtitle_files = {}, {}
@@ -470,17 +469,12 @@ class Processor:
             list: Comprising one element; the output filename.
 
         """
-        name = '.'.join(self.container.just_file_name.split('.')[:-1])
-        if not yes_no('Use default output filename: {} (.mp4)?'.format(name)):
-            while True:
-                f = click.prompt('Specify filename (without extension)').strip()
-                if f:
-                    name = f
-                    break
-                else:
-                    click.echo('You must specify a filename. Try again...')
 
-        output_name = [self.container.path + '/' + name + '.mp4']
+        name = pathlib.PurePath(self.file_name).stem
+        if not yes_no('Use default output filename: {} (.mp4)?'.format(name)):
+            name = click.prompt('Specify filename (without extension)').strip()
+
+        output_name = [os.path.join(os.path.basename(self.file_name), name + '.mp4')]
         return output_name
 
 
@@ -632,6 +626,8 @@ def cli(ctx, file, directory, recursive):
     exclusive(ctx.params, ['file', 'recursive'],
         'a file may not be specified with the recursive flag')
 
+    ctx.obj = {}
+
     if file:
         ctx.obj['FILES'] = [file]
     else:
@@ -706,4 +702,4 @@ def convert(ctx):
             time.sleep(1)
 
 if __name__ == '__main__':
-    cli(obj={})
+    cli()
