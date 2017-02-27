@@ -6,14 +6,10 @@ System Dependencies:
 Todo:
     * Config file
     * Filename whitelist?
-    * probe_file:
-        * Raise error on ffmpeg error
-        * Test Filename
-    * display_file:
-        * Split up?
     * Tests
-    * Status display / interrupts
-    * External subtitle file
+    * Rewrite processor
+    * Default to yes
+    * Status interrupts
     * Specify metadata edits
 
 """
@@ -47,79 +43,24 @@ class CancelProcessorError(Error):
     def __init__(self, file_name):
         self.file_name = file_name
 
+class CancelSubtitleError(Error):
+    """Custom Exception for when the user cancels adding a subtitle file."""
+
+    def __init__(self, message=None):
+        self.message = message if message else ''
+
 class Container:
     """Multimedia container file object."""
 
     def __init__(self, file_name):
         """Initialize container object.
 
-        First, attempt to probe the file with ffprobe by calling probe_file.
-        If the probe is succesful, finish instatiating instance variables by
-        calling parse_info to parse the results of the probe.
+        First, attempt to probe the file with ffprobe. If the probe is
+        succesful, finish instatiation using the results of the probe,
+        building Stream instances as necessary.
 
         Args:
-            file_name (str): The file to represent.
-
-        """
-
-        self.file_info = self.probe_file(file_name)
-        self.subtitle_files = {}
-        self.parse_info()
-
-    def add_subtitles(self):
-        """Add an external subtitle file. Allow the user to set a custom
-        encoding."""
-
-        sub_file, encoding = self.add_sub_file()
-        while True:
-            c = multiple_choice('accept / retry / specify custom / cancel', 'Continue?',
-                ['a', 'r', 's', 'c'])
-            if c == 'a':
-                index = len(self.subtitle_files.keys()) + 1
-                self.subtitle_files[index] = SubtitleFile(index, sub_file, encoding)
-                break
-            elif c == 'r':
-                sub_file, encoding = self.add_sub_file()
-            elif c == 's':
-                while True:
-                    encoding = click.prompt('Enter custom encoding')
-                    if encoding:
-                        click.echo('Custom encoding specified: {}'.format(encoding))
-                        break
-                    else:
-                        click.echo('You must specify an encoding')
-            elif c == 'c':
-                break
-
-    def add_sub_file(self):
-        """Prompt the user to specify a subtitle file.
-
-        Use chardet to detect the character encoding. Display the detected
-        encoding and confidence to the user.
-
-        Returns:
-            string: The subtitle file name
-            string: The subtitle file encoding
-
-        """
-
-        sub_file = click.prompt('Enter subtitle file name', type=click.Path(exists=True,
-            dir_okay=False, readable=True))
-        with open(sub_file, mode='rb') as f:
-            line = f.readline()
-        detected = chardet.detect(line)
-        click.echo('Subtitle file encoding detected as {}, with {}% confidence'.format(
-            detected['encoding'], int(detected['confidence']) * 100))
-        return sub_file, detected['encoding']
-
-    def probe_file(self, file_name):
-        """Use ffprobe to extract information about a file.
-
-        Args:
-            file_name (str): The file to probe.
-
-        Returns:
-            json: Detailed file information from ffprobe.
+            file_name (str): The multimedia container file to represent.
 
         Raises:
             ProbeError: If ffprobe does not return cleanly.
@@ -127,43 +68,48 @@ class Container:
         """
 
         self.file_name = file_name
-        probe_info = subprocess.run(['/usr/bin/ffprobe', '-v', 'error', '-show_format',
+        self.just_file_name = file_name.split('/')[-1]
+        self.path = '/'.join(file_name.split('/')[:-1])
+        self.title, self.duration, self.size, self.bitrate, self.format = ['' for _ in range(5)]
+        self.microseconds = 1
+        self.streams, self.subtitle_files = {}, {}
+
+        probe_response = subprocess.run(['/usr/bin/ffprobe', '-v', 'error', '-show_format',
             '-show_streams', '-of', 'json', self.file_name], stdout=subprocess.PIPE,
             stderr=subprocess.PIPE)
-        if probe_info.returncode:
-            raise ProbeError(file_name, probe_info.stderr.decode('utf-8').strip('\n'))
+        if probe_response.returncode:
+            raise ProbeError(file_name, probe_response.stderr.decode('utf-8').strip('\n'))
         else:
-            return json.loads(probe_info.stdout)
+            probe_info = json.loads(probe_response.stdout)
+            if 'tags' in probe_info['format'] and 'title' in probe_info['format']['tags']:
+                self.title = probe_info['format']['tags']['title']
+            if 'duration' in probe_info['format']:
+                duration = float(probe_info['format']['duration'])
+                self.microseconds = int(duration * 1000000)
+                self.length = datetime.timedelta(seconds=round(duration, 0))
+            if 'size' in probe_info['format']:
+                self.size = round(bitmath.MiB(bytes=int(probe_info['format']['size'])).value, 2)
+            if 'bit_rate' in probe_info['format']:
+                bits=int(probe_info['format']['bit_rate'])
+                self.bitrate = round(bitmath.Mib(bits=bits).value, 2)
+            if 'format_name' in probe_info['format']:
+                self.container_format = probe_info['format']['format_name']
 
-    def parse_info(self):
-        """Parse ffprobe results to finish building instance.
+            for stream in probe_info['streams']:
+                self.streams[int(stream['index'])] = Stream(stream)
 
-        Instantiate Container instance variables, when available, using the json info from
-        probe_file, defaulting to None if not specified. Iterate over the streams,
-        instantiating Stream instances for each.
+    def add_subtitle_file(self, file_name, encoding):
+        """Add an external subtitle file. Allow the user to set a custom
+        encoding.
+
+        Args:
+            file_name (str): The name of the subtitle file.
+            encoding (str): The encoding of the subtitle file.
 
         """
 
-        self.title, self.duration, self.size, self.bitrate, self.format = ['' for _ in range(5)]
-        self.miliseconds = 1
-        if 'tags' in self.file_info['format'] and 'title' in self.file_info['format']['tags']:
-            self.title = self.file_info['format']['tags']['title']
-        if 'duration' in self.file_info['format']:
-            duration = float(self.file_info['format']['duration'])
-            self.microseconds = int(duration * 1000000)
-            self.length = datetime.timedelta(seconds=round(duration, 0))
-        if 'size' in self.file_info['format']:
-            self.size = round(bitmath.MiB(bytes=int(self.file_info['format']['size'])).value, 2)
-        if 'bit_rate' in self.file_info['format']:
-            bits=int(self.file_info['format']['bit_rate'])
-            self.bitrate = round(bitmath.Mib(bits=bits).value, 2)
-        if 'format_name' in self.file_info['format']:
-            self.container_format = self.file_info['format']['format_name']
-
-        self.streams = {}
-        for stream in self.file_info['streams']:
-            self.streams[int(stream['index'])] = Stream(stream)
-
+        index = len(self.subtitle_files.keys()) + 1
+        self.subtitle_files[index] = SubtitleFile(index, file_name, encoding)
 
     def display(self):
         """Echo a pretty representation of the Container."""
@@ -204,8 +150,7 @@ class Stream:
         """
 
         [self.type, self.name, self.language, self.default, self.title, self.resolution,
-            self.bitrate, self.scan, self.channels, self.bitrate, self.sub_file,
-            self.encoding] = [None for _ in range(12)]
+            self.bitrate, self.scan, self.channels, self.bitrate] = [None for _ in range(10)]
         self.index = stream_info['index']
 
         if 'codec_type' in stream_info:
@@ -237,11 +182,6 @@ class Stream:
             if 'bit_rate' in stream_info:
                 bit_rate = round(bitmath.Kib(bits=int(stream_info['bit_rate'])).value)
                 self.bitrate = bit_rate
-        elif self.type == 'subtitle':
-            if 'sub_file' in stream_info:
-                self.sub_file = stream_info['sub_file']
-            if 'encoding' in stream_info:
-                self.encoding = stream_info['encoding']
 
     def display(self):
         """Echo a pretty representation of the stream."""
@@ -275,11 +215,6 @@ class Stream:
                 stream_specs.append('Channels: {}'.format(self.channels))
             if self.bitrate:
                 stream_specs.append('Bitrate: {}Kib/s'.format(self.bitrate))
-        elif self.type == 'subtitle':
-            if self.sub_file:
-                stream_specs.append('File: {}'.format(self.sub_file))
-            if self.encoding:
-                stream_specs.append('Encoding: {}'.format(self.encoding))
         if stream_specs:
             click.echo('    ' + ' | '.join(stream_specs))
 
@@ -318,6 +253,7 @@ class Processor:
         self.container = container
         self.temp_file = tempfile.NamedTemporaryFile()
         self.output_command = self.build_command()
+        self.progress = 0
         while True:
             confirm = False
             click.echo('Generated Command:')
@@ -381,13 +317,22 @@ class Processor:
         """
 
         if len(self.container.streams.keys()) == 2:
-            return [0, 1]
+            return self.container.streams.keys()
+
+        audio, video = None, None
+        for index, stream in self.container.streams.items():
+            if audio == None and stream.type == 'audio':
+                audio = index
+            elif video == None and stream.type == 'video':
+                video = index
+        if yes_no('Use streams {} and {}?'.format(video, audio)):
+                return([video, audio])
 
         acceptable_responses = self.container.streams.keys()
         ask = 'Which streams would you like?'
         prompt = ask + ' [{}]'.format(' '.join([str(r) for r in acceptable_responses]))
         while True:
-            responses = click.prompt(prompt).split(' ')
+            responses = click.prompt(prompt).strip().split(' ')
             acceptable, video, audio = True, False, False
             for r in responses:
                 if not r.isdigit():
@@ -429,17 +374,11 @@ class Processor:
         else:
             click.echo('Stream {} (video) needs to be transcoded.'.format(stream.index))
             if not yes_no('Use default crf (18)?'):
-                while True:
-                    f = click.prompt('Specify crf [0-51]')
-                    if f.isdigit() and int(f) in range(52):
-                        crf = int(f)
-                        break
-                    else:
-                        click.echo('Invalid input, try again...')
+                crf = click.prompt('Specify crf [0-51]', type=click.IntRange(0, 52))
             else:
                 crf = 18
             command.extend(['-c:v:{}'.format(self.video_streams), 'libx264', '-preset', 'slow',
-                '-crf', crf, '-pix_fmt', 'yuv420p'])
+                '-crf', str(crf), '-pix_fmt', 'yuv420p'])
 
         self.video_streams += 1
         return command
@@ -527,25 +466,21 @@ class Processor:
         Ask the user if they would like to change the output file name. Allow
         them to specify one if they so desire.
 
-        Args:
-            input_filename (string)
-
         Returns:
             list: Comprising one element; the output filename.
 
         """
-        input_filename = self.container.file_name
-        name = '.'.join(input_filename.split('/')[-1].split('.')[:-1])
+        name = '.'.join(self.container.just_file_name.split('.')[:-1])
         if not yes_no('Use default output filename: {} (.mp4)?'.format(name)):
             while True:
-                f = click.prompt('Specify filename (without extension)')
+                f = click.prompt('Specify filename (without extension)').strip()
                 if f:
                     name = f
                     break
                 else:
                     click.echo('You must specify a filename. Try again...')
 
-        output_name = ['/'.join(input_filename.split('/')[:-1]) + '/' + name + '.mp4']
+        output_name = [self.container.path + '/' + name + '.mp4']
         return output_name
 
 
@@ -602,6 +537,53 @@ def multiple_choice(key, prompt, responses):
             return c
         else:
             click.echo('Invalid input, try again...')
+
+def add_subtitles():
+    """Add an external subtitle file. Allow the user to set a custom encoding.
+
+    Raises:
+        CancelSubtitleError: If the user cancels the operation.
+
+    Returns:
+        string: The subtitle file name
+        string: The subtitle file encoding
+
+    """
+
+    sub_file, encoding = sub_file_prompt()
+    while True:
+        c = multiple_choice('accept / retry / specify custom / cancel', 'Continue?',
+            ['a', 'r', 's', 'c'])
+        if c == 'a':
+            return sub_file, encoding
+        elif c == 'r':
+            sub_file, encoding = sub_file_prompt()
+        elif c == 's':
+            encoding = click.prompt('Enter custom encoding')
+            click.echo('Custom encoding specified: {}'.format(encoding))
+        elif c == 'c':
+            raise CancelSubtitleError('Cancelled subtitle file addition.')
+
+def sub_file_prompt():
+    """Prompt the user to specify a subtitle file.
+
+    Use chardet to detect the character encoding. Display the detected
+    encoding and confidence to the user.
+
+    Returns:
+        string: The subtitle file name
+        string: The subtitle file encoding
+
+    """
+
+    sub_file = click.prompt('Enter subtitle file name', type=click.Path(exists=True,
+    dir_okay=False, readable=True))
+    with open(sub_file, mode='rb') as f:
+        line = f.readline()
+    detected = chardet.detect(line)
+    click.echo('Subtitle file encoding detected as {}, with {}% confidence'.format(
+        detected['encoding'], int(detected['confidence']) * 100))
+    return sub_file, detected['encoding']
 
 def build_containers(file_list):
     """Utility function to build a list of Container objets given a list of
@@ -681,7 +663,11 @@ def convert(ctx):
             container.display()
             c = multiple_choice('yes / no / add subtitles', 'Convert file?', ['y', 'n', 'a'])
             if c == 'a':
-                container.add_subtitles()
+                try:
+                    sub_file, encoding = add_subtitles()
+                    container.add_subtitle_file(sub_file, encoding)
+                except CancelSubtitleError as e:
+                    click.echo('Warning: {}'.format(e.message))
             if c == 'y':
                 try:
                     processor = Processor(container)
@@ -693,27 +679,31 @@ def convert(ctx):
             if c in ['y', 'n']:
                 break
 
-    while processors:
-        for processor in processors:
-            if processor.process.poll() != None:
-                if processor.process.returncode:
-                    click.echo(click.style('Warning: ffmpeg error while converting {}'.format(
-                        processor.container.file_name), fg='red'))
-                    click.echo(processor.process.communicate()[1].strip('\n'))
-                processors.remove(processor)
-            else:
-                with open(processor.temp_file.name, 'r') as status:
-                    line_list = status.readlines()
-                ms = 0
-                for line in reversed(line_list):
-                    if line.split('=')[0] == 'out_time_ms':
-                        if line.split('=')[1].strip('\n').isdigit():
-                            ms = int(line.split('=')[1])
-                            break
-                if ms:
-                    percent = round(100 * (ms / processor.container.microseconds), 1)
-                    click.echo('{}% - {}'.format(percent, processor.container.file_name))
-        time.sleep(1)
+    total_ms = sum([p.container.microseconds for p in processors])
+    label = 'Processing {} files:'.format(len(processors))
+    with  click.progressbar(length=total_ms, label=label) as bar:
+        while processors:
+            for processor in processors:
+                if processor.process.poll() != None:
+                    if processor.process.returncode:
+                        click.echo(click.style('Warning: ffmpeg error while converting {}'.format(
+                            processor.container.file_name), fg='red'))
+                        click.echo(processor.process.communicate()[1].strip('\n'))
+                    bar.update(processor.container.microseconds - processor.progress)
+                    processors.remove(processor)
+                else:
+                    with open(processor.temp_file.name, 'r') as status:
+                        line_list = status.readlines()
+                    ms = 0
+                    for line in reversed(line_list):
+                        if line.split('=')[0] == 'out_time_ms':
+                            if line.split('=')[1].strip('\n').isdigit():
+                                ms = int(line.split('=')[1])
+                                break
+                    if ms:
+                        bar.update(ms - processor.progress)
+                        processor.progress = ms
+            time.sleep(1)
 
 if __name__ == '__main__':
     cli(obj={})
