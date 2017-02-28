@@ -11,6 +11,7 @@ Todo:
     * Status interrupts
     * Specify metadata edits
     * Remove subtitle files
+    * Install / packaging
 
 """
 
@@ -95,7 +96,8 @@ class Container:
         self.file_name = file_name
         self.title, self.duration, self.size, self.bitrate, self.format = ['' for _ in range(5)]
         self.microseconds = 1
-        self.streams, self.subtitle_files = {}, {}
+        self.streams = {}
+        self.subtitle_files = []
 
         probe_response = subprocess.run(['/usr/bin/ffprobe', '-v', 'error', '-show_format',
             '-show_streams', '-of', 'json', self.file_name], stdout=subprocess.PIPE,
@@ -155,7 +157,7 @@ class Container:
         for index, stream in self.streams.items():
             stream.display()
 
-        for index, subtitle in self.subtitle_files.items():
+        for subtitle in self.subtitle_files:
             subtitle.display()
 
 class Stream:
@@ -293,8 +295,7 @@ class Stream:
 class SubtitleFile:
     """Subtitle file object."""
 
-    def __init__(self, index, file_name, encoding):
-        self.index = index
+    def __init__(self, file_name, encoding):
         self.file_name = file_name
         self.encoding = encoding
         self.options = ['mov_text']
@@ -303,7 +304,7 @@ class SubtitleFile:
         """Echo a pretty representation of the subtitle file."""
 
         click.echo(click.style('Subtitle File: {}'.format(self.file_name), fg='magenta'))
-        click.echo('  Index: {} | Encoding: {}'.format(self.index, self.encoding))
+        click.echo('  Encoding: {}'.format(self.encoding))
 
 class Processor:
     """Container processor object."""
@@ -363,12 +364,12 @@ class Processor:
 
         command = ['/usr/bin/ffmpeg', '-nostdin', '-progress', self.temp_file.name, '-v', 'error',
             '-y', '-i', self.container.file_name]
-        for subtitle in self.container.subtitle_files.values():
+        for subtitle in self.container.subtitle_files:
             command.extend(['-sub_charenc', subtitle.encoding, '-i', subtitle.file_name])
         for stream in self.streams:
             command.extend(['-map', '0:{}'.format(stream)])
-        for subtitle in self.container.subtitle_files.keys():
-            command.extend(['-map' '{}:0'.format(subtitle)])
+        for index, subtitle in enumerate(self.container.subtitle_files):
+            command.extend(['-map', '{}:0'.format(index + 1)])
         audio_streams = 0
         video_streams = 0
         subtitle_streams = 0
@@ -384,7 +385,7 @@ class Processor:
                 command.extend(['-c:s:{}'.format(subtitle_streams)])
                 subtitle_streams += 1
             command.extend(stream.options)
-        for subtitle in self.container.subtitle_files.values():
+        for subtitle in self.container.subtitle_files:
             command.extend(['-c:s:{}'.format(subtitle_streams)])
             subtitle_streams += 1
             command.extend(subtitle.options)
@@ -446,15 +447,14 @@ def multiple_choice(prompt, responses, key=None):
         else:
             click.echo('Invalid input, try again...')
 
-def add_subtitles():
+def add_subtitles(container):
     """Add an external subtitle file. Allow the user to set a custom encoding.
+
+    Args:
+        container (Container): The Container to add the subtitle file to.
 
     Raises:
         UserCancelError: If the user cancels adding a subtitle file.
-
-    Returns:
-        string: The subtitle file name
-        string: The subtitle file encoding
 
     """
 
@@ -463,7 +463,8 @@ def add_subtitles():
         c = multiple_choice('Continue?', ['a', 'r', 's', 'c'],
             'accept / retry / specify custom / cancel')
         if c == 'a':
-            return sub_file, encoding
+            container.subtitle_files.append(SubtitleFile(sub_file, encoding))
+            break
         elif c == 'r':
             sub_file, encoding = sub_file_prompt()
         elif c == 's':
@@ -471,6 +472,31 @@ def add_subtitles():
             click.echo('Custom encoding specified: {}'.format(encoding))
         elif c == 'c':
             raise UserCancelError('Cancelled subtitle file addition.')
+
+def remove_subtitles(container):
+    """Remove an external subtitle file.
+
+    Args:
+        container (Container): The Container to remove the subtitle file from.
+
+    Raises:
+        UserCancelError: If the user cancels removing a subtitle file, or if
+        there are no subtitle files to remove.
+
+    """
+
+    if len(container.subtitle_files) == 0:
+        raise UserCancelError('There are no subtitle files to remove.')
+    else:
+        for index, subtitle in enumerate(container.subtitle_files):
+            click.echo(click.style('Number: {}'.format(index), fg='cyan', bold=True))
+            subtitle.display()
+        acceptable = [str(i) for i in range(len(container.subtitle_files))] + ['c']
+        action = multiple_choice('Enter the file number to remove, or c to cancel:', acceptable)
+        if action == 'c':
+            raise UserCancelError('Cancelled subtitle file removal.')
+        else:
+            container.subtitle_files.pop(int(action))
 
 def sub_file_prompt():
     """Prompt the user to specify a subtitle file.
@@ -651,25 +677,27 @@ def convert(ctx):
         processor = Processor(container)
         while True:
             processor.display()
-            c = multiple_choice('Convert file?', ['y', 'n', 'a', 's', 'e', 'c', 'p'],
-                'yes/no/add subtitles/select streams/edit stream/change filename/print command')
+            c = multiple_choice('Convert file?', ['y', 'n', 'a', 'r', 's', 'e', 'c', 'p'],
+                'yes/no/{add/remove} subtitle file/{select/edit} streams/change filename/'
+                + 'display command')
             try:
                 if c == 'n':
                     raise UserCancelError('Cancelled converting {}'.format(container.file_name))
                 elif c == 'a':
-                    sub_file, encoding = add_subtitles()
-                    container.add_subtitle_file(sub_file, encoding)
+                    add_subtitles(container)
+                elif c == 'r':
+                    remove_subtitles(container)
                 elif c == 's':
                     select_streams(processor)
                 elif c == 'e':
                     edit_stream_options(container)
                 elif c == 'c':
                     change_file_name(processor)
-                elif c == 'p':
+                elif c == 'd':
                     click.echo(click.style('Command:', fg='cyan', bold=True))
                     click.echo(' '.join(processor.build_command()))
             except UserCancelError as e:
-                click.echo('Warning: {}'.format(e.message))
+                click.echo(click.style('{}Warning: {}'.format(os.linesep, e.message), fg='red'))
             if c == 'y':
                 processor.execute()
                 processors.append(processor)
