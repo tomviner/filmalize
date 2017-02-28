@@ -10,7 +10,6 @@ Todo:
     * Tests
     * Status interrupts
     * Specify metadata edits
-    * Remove subtitle files
     * Install / packaging
 
 """
@@ -94,7 +93,8 @@ class Container:
         """
 
         self.file_name = file_name
-        self.title, self.duration, self.size, self.bitrate, self.format = ['' for _ in range(5)]
+        [self.title, self.duration, self.length, self.size, self.bitrate,
+            self.format] = ['' for _ in range(6)]
         self.microseconds = 1
         self.streams = {}
         self.subtitle_files = []
@@ -178,8 +178,8 @@ class Stream:
         [self.type, self.name, self.language, self.default, self.title, self.resolution,
             self.bitrate, self.scan, self.channels, self.bitrate] = [None for _ in range(10)]
         self.index = stream_info['index']
-        self.options = []
-        self.option_summary = 'copy'
+        self.crf, self.obr = 0, 0
+        self.option_summary = ''
 
         if 'codec_type' in stream_info:
             self.type = stream_info['codec_type']
@@ -204,58 +204,54 @@ class Stream:
                 self.bitrate = round(bitmath.Mib(bits=int(stream_info['bit_rate'])).value, 2)
             if 'field_order' in stream_info:
                 self.scan = stream_info['field_order']
-            self.generate_video_options()
         elif self.type == 'audio':
             if 'channel_layout' in stream_info:
                 self.channels = stream_info['channel_layout']
             if 'bit_rate' in stream_info:
                 bit_rate = round(bitmath.Kib(bits=int(stream_info['bit_rate'])).value)
                 self.bitrate = bit_rate
-            self.generate_audio_options()
+
+
+    def build_options(self, number=0):
+        """Generate ffmpeg codec/bitrate options for this Stream.
+
+        The options generated will use custom values, if specified, or the
+        default values.
+
+        Args:
+            number (int): The number of Streams of this type that have been
+            added to the command.
+
+        Returns:
+            list: The ffmpeg options for this Stream.
+
+        """
+
+        options = []
+        if self.type == 'video':
+            options.extend(['-c:v:{}'.format(number)])
+            if self.crf or self.codec != 'h264':
+                crf = self.crf if self.crf else 18
+                options.extend(['libx264', '-preset', 'slow', '-crf', str(crf), '-pix_fmt',
+                    'yuv420p'])
+                self.option_summary = 'transcode -> h264, crf={}'.format(crf)
+            else:
+                options.extend(['copy'])
+                self.option_summary = 'copy'
+        elif self.type == 'audio':
+            options.extend(['-c:a:{}'.format(number)])
+            if self.obr or self.codec != 'aac':
+                br = self.obr if self.obr else self.bitrate if self.bitrate else 384
+                options.extend(['aac', '-b:a:{}'.format(number), '{}k'.format(br)])
+                self.option_summary = 'transcode -> aac, bitrate={}Kib/s'.format(br)
+            else:
+                options.extend(['copy'])
+                self.option_summary = 'copy'
         elif self.type == 'subtitle':
-            self.options.extend(['mov_text'])
+            options.extend(['-c:s:{}'.format(number), 'mov_text'])
             self.option_summary = 'transcode -> mov_text'
 
-    def generate_video_options(self, crf=None):
-        """Generate ffmpeg codec/bitrate options for this video stream.
-
-        If a crf value is specified, use that to transcode the stream.
-        Otherwise, if the stream is already h264, copy it to the output, or
-        transcode it using the default crf, 18.
-
-        Args:
-            crf (int): The constant rate factor to apply while transcoding.
-
-        """
-
-        if self.codec == 'h264' and not crf:
-            self.options = ['copy']
-            self.option_summary = 'copy'
-        else:
-            crf = 18 if not crf else crf
-            self.options = ['libx264', '-preset', 'slow', '-crf', str(crf), '-pix_fmt',
-                'yuv420p']
-            self.option_summary = 'transcode -> h264, crf={}'.format(crf)
-
-    def generate_audio_options(self, br=None):
-        """Generate ffmpeg codec/bitrate options for this audio stream.
-
-        If a bitrate is specified, use that to transcode the stream. Otherwise,
-        if the stream is already aac, copy it to the output, or transcode it
-        using the input stream's bitrate, if available, or 384kib/s.
-
-        Args:
-            br (int): The bitrate, in kib/s, to use while transcoding.
-
-        """
-
-        if self.codec == 'aac' and not br:
-            self.options = ['copy']
-            self.option_summary = 'copy'
-        else:
-            br = self.bitrate if not br else br
-            self.options = ['aac', '-b:a', '{}k'.format(br)]
-            self.option_summary = 'transcode -> aac, bitrate={}kib/s'.format(br)
+        return options
 
     def display(self):
         """Echo a pretty representation of the stream."""
@@ -299,6 +295,7 @@ class SubtitleFile:
         self.file_name = file_name
         self.encoding = encoding
         self.options = ['mov_text']
+        self.option_summary = 'transcode -> mov_text'
 
     def display(self):
         """Echo a pretty representation of the subtitle file."""
@@ -346,10 +343,15 @@ class Processor:
 
         self.container.display()
         click.echo(click.style('Filmalize Actions:', fg='cyan', bold=True))
-        for stream in self.streams:
-            header = 'Stream {}: '.format(stream)
-            info = self.container.streams[stream].option_summary
+        for s in self.streams:
+            header = 'Stream {}: '.format(s)
+            stream = self.container.streams[s]
+            stream.build_options()
+            info = stream.option_summary
             click.echo(click.style(header, fg='green', bold=True) + click.style(info, fg='yellow'))
+        for subtitle in self.container.subtitle_files:
+            click.echo(click.style(subtitle.file_name + ': ', fg='green', bold=True) + click.style(
+                subtitle.option_summary, fg='yellow'))
         click.echo(click.style('Output File: {}'.format(self.output_name), fg='magenta'))
 
     def build_command(self):
@@ -370,25 +372,15 @@ class Processor:
             command.extend(['-map', '0:{}'.format(stream)])
         for index, subtitle in enumerate(self.container.subtitle_files):
             command.extend(['-map', '{}:0'.format(index + 1)])
-        audio_streams = 0
-        video_streams = 0
-        subtitle_streams = 0
+        stream_number =  {'video': 0, 'audio': 0, 'subtitle': 0}
         output_streams = [self.container.streams[s] for s in self.streams]
         for stream in output_streams:
-            if stream.type == 'video':
-                command.extend(['-c:v:{}'.format(video_streams)])
-                video_streams += 1
-            elif stream.type == 'audio':
-                command.extend(['-c:a:{}'.format(audio_streams)])
-                audio_streams += 1
-            elif stream.type == 'subtitle':
-                command.extend(['-c:s:{}'.format(subtitle_streams)])
-                subtitle_streams += 1
-            command.extend(stream.options)
+            command.extend(stream.build_options(stream_number[stream.type]))
+            stream_number[stream.type] += 1
         for subtitle in self.container.subtitle_files:
-            command.extend(['-c:s:{}'.format(subtitle_streams)])
-            subtitle_streams += 1
+            command.extend(['-c:s:{}'.format(stream_number['subtitle'])])
             command.extend(subtitle.options)
+            stream_number['subtitle'] += 1
         command.extend([os.path.join(os.path.dirname(self.container.file_name), self.output_name)])
         return command
 
@@ -554,28 +546,25 @@ def edit_stream_options(container):
     """
 
     container.display()
-    indices = [str(i) for i in container.streams.keys()]
+    indices = [str(i) for i, s in container.streams.items() if s.type in ['audio', 'video']]
     stream = container.streams[int(multiple_choice('Select a stream:', indices))]
     if stream.type == 'video':
         if stream.codec == 'h264' and yes_no('Copy stream?'):
-            stream.generate_video_options()
+            stream.crf = 0
         elif yes_no('Use default crf?'):
-            stream.generate_video_options(18)
+            stream.crf = 18
         else:
             crf = click.prompt('Enter crf', type=click.IntRange(0, 51))
-            stream.generate_video_options(crf)
+            stream.crf = crf
     elif stream.type == 'audio':
         if stream.codec == 'aac' and yes_no('Copy stream?'):
-            stream.generate_audio_options()
-        elif stream.bitrate and yes_no('Use source bitrate ({}kib/s)?'.format(stream.bitrate)):
-            stream.generate_audio_options(stream.bitrate)
-        elif yes_no('Use default bitrate (384kib/s)?'):
-            stream.generate_audio_options(384)
+            stream.obr = 0
+        elif stream.bitrate and yes_no('Use source bitrate ({}Kib/s)?'.format(stream.bitrate)):
+            stream.obr = stream.bitrate
+        elif yes_no('Use default bitrate (384Kib/s)?'):
+            stream.obr = 384
         else:
-            br = click.prompt('Enter bitrate', type=click.IntRange(0, 5000))
-            stream.generate_audio_options(br)
-    else:
-        click.echo('Sorry: you selected a stream that cannot be edited.')
+            stream.obr = click.prompt('Enter bitrate', type=click.IntRange(0, 5000))
 
 def change_file_name(processor):
     """Prompt the user to specify a name for the output file.
@@ -677,7 +666,7 @@ def convert(ctx):
         processor = Processor(container)
         while True:
             processor.display()
-            c = multiple_choice('Convert file?', ['y', 'n', 'a', 'r', 's', 'e', 'c', 'p'],
+            c = multiple_choice('Convert file?', ['y', 'n', 'a', 'r', 's', 'e', 'c', 'd'],
                 'yes/no/{add/remove} subtitle file/{select/edit} streams/change filename/'
                 + 'display command')
             try:
