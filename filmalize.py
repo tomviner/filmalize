@@ -2,15 +2,15 @@
 
 System Dependencies:
     * ffmpeg
+    * python 3.4
 
 Todo:
     * Config file
     * Filename whitelist?
     * Tests
-    * Rewrite processor
-    * Default to yes
     * Status interrupts
     * Specify metadata edits
+    * Remove subtitle files
 
 """
 
@@ -38,17 +38,41 @@ class ProbeError(Error):
         self.file_name = file_name
         self.message = message if message else ''
 
-class CancelProcessorError(Error):
-    """Custom Exception for when the user cancels processing a file."""
-
-    def __init__(self, file_name):
-        self.file_name = file_name
-
-class CancelSubtitleError(Error):
-    """Custom Exception for when the user cancels adding a subtitle file."""
+class UserCancelError(Error):
+    """Custom Exception for when the user cancels an action."""
 
     def __init__(self, message=None):
         self.message = message if message else ''
+
+class SelectedStreams(click.ParamType):
+    """Custom Click parameter type to validate a selection of streams from a
+    Container."""
+
+    def __init__(self, container):
+        """Initialize type: get streams from container."""
+
+        self.streams = container.streams
+
+    def convert(self, value, param, ctx):
+        """Validate that input stream indices are acceptable. Return indices
+        formatted as a list of integers."""
+
+        selected = value.strip().split(' ')
+        video, audio = False, False
+        for s in selected:
+            if not s.isdigit():
+                self.fail('Invalid input. Enter stream indices separated by a single space.')
+            stream = int(s)
+            if stream not in self.streams.keys():
+                self.fail('Invalid input. {} is not an available stream index.'.format(stream))
+            elif self.streams[stream].type == 'audio':
+                audio = True
+            elif self.streams[stream].type == 'video':
+                video = True
+        if audio and video:
+            return [int(s) for s in selected]
+        else:
+            self.fail('Invalid input. You must include at least one audio and one video stream.')
 
 class Container:
     """Multimedia container file object."""
@@ -77,7 +101,7 @@ class Container:
             '-show_streams', '-of', 'json', self.file_name], stdout=subprocess.PIPE,
             stderr=subprocess.PIPE)
         if probe_response.returncode:
-            raise ProbeError(file_name, probe_response.stderr.decode('utf-8').strip('\n'))
+            raise ProbeError(file_name, probe_response.stderr.decode('utf-8').strip(os.linesep))
         else:
             probe_info = json.loads(probe_response.stdout)
             if 'tags' in probe_info['format'] and 'title' in probe_info['format']['tags']:
@@ -141,7 +165,8 @@ class Stream:
         """Initialize stream object.
 
         Instantiate Stream instance variables, when available, using the info
-        passed in stream_info, defaulting to None if not specified.
+        passed in stream_info, defaulting to None if not specified. Generate
+        default ffmpeg options.
 
         Args:
             stream_info (dict): Stream information as reported by ffprobe.
@@ -151,6 +176,8 @@ class Stream:
         [self.type, self.name, self.language, self.default, self.title, self.resolution,
             self.bitrate, self.scan, self.channels, self.bitrate] = [None for _ in range(10)]
         self.index = stream_info['index']
+        self.options = []
+        self.option_summary = 'copy'
 
         if 'codec_type' in stream_info:
             self.type = stream_info['codec_type']
@@ -175,12 +202,58 @@ class Stream:
                 self.bitrate = round(bitmath.Mib(bits=int(stream_info['bit_rate'])).value, 2)
             if 'field_order' in stream_info:
                 self.scan = stream_info['field_order']
+            self.generate_video_options()
         elif self.type == 'audio':
             if 'channel_layout' in stream_info:
                 self.channels = stream_info['channel_layout']
             if 'bit_rate' in stream_info:
                 bit_rate = round(bitmath.Kib(bits=int(stream_info['bit_rate'])).value)
                 self.bitrate = bit_rate
+            self.generate_audio_options()
+        elif self.type == 'subtitle':
+            self.options.extend(['mov_text'])
+            self.option_summary = 'transcode -> mov_text'
+
+    def generate_video_options(self, crf=None):
+        """Generate ffmpeg codec/bitrate options for this video stream.
+
+        If a crf value is specified, use that to transcode the stream.
+        Otherwise, if the stream is already h264, copy it to the output, or
+        transcode it using the default crf, 18.
+
+        Args:
+            crf (int): The constant rate factor to apply while transcoding.
+
+        """
+
+        if self.codec == 'h264' and not crf:
+            self.options = ['copy']
+            self.option_summary = 'copy'
+        else:
+            crf = 18 if not crf else crf
+            self.options = ['libx264', '-preset', 'slow', '-crf', str(crf), '-pix_fmt',
+                'yuv420p']
+            self.option_summary = 'transcode -> h264, crf={}'.format(crf)
+
+    def generate_audio_options(self, br=None):
+        """Generate ffmpeg codec/bitrate options for this audio stream.
+
+        If a bitrate is specified, use that to transcode the stream. Otherwise,
+        if the stream is already aac, copy it to the output, or transcode it
+        using the input stream's bitrate, if available, or 384kib/s.
+
+        Args:
+            br (int): The bitrate, in kib/s, to use while transcoding.
+
+        """
+
+        if self.codec == 'aac' and not br:
+            self.options = ['copy']
+            self.option_summary = 'copy'
+        else:
+            br = self.bitrate if not br else br
+            self.options = ['aac', '-b:a', '{}k'.format(br)]
+            self.option_summary = 'transcode -> aac, bitrate={}kib/s'.format(br)
 
     def display(self):
         """Echo a pretty representation of the stream."""
@@ -224,6 +297,7 @@ class SubtitleFile:
         self.index = index
         self.file_name = file_name
         self.encoding = encoding
+        self.options = ['mov_text']
 
     def display(self):
         """Echo a pretty representation of the subtitle file."""
@@ -237,246 +311,85 @@ class Processor:
     def __init__(self, container):
         """Initialize Processor object.
 
-        Build a ffmpeg command to process the given Container. Prompt the
-        user for confirmation. The user may accept, decline, or retry.
+        Set up default values:
+            Select the first audio and video stream.
+            Use the same file name as the input file, but suffixed with '.mp4'.
 
         Args:
             container (Container): The container object to process.
-
-        Raises:
-            CancelProcessorError: If the user declines to process the
-                container.
 
         """
 
         self.container = container
         self.temp_file = tempfile.NamedTemporaryFile()
-        self.output_command = self.build_command()
+        self.streams = []
+        audio, video = None, None
+        for index, stream in self.container.streams.items():
+            if not audio and stream.type == 'audio':
+                audio = True
+                self.streams.append(index)
+            elif not video and stream.type == 'video':
+                video = True
+                self.streams.append(index)
+        self.output_name = pathlib.PurePath(self.container.file_name).stem + '.mp4'
         self.progress = 0
-        while True:
-            confirm = False
-            click.echo('Generated Command:')
-            click.echo(' '.join(self.output_command))
-            c = multiple_choice('yes / no / retry', 'Continue?', ['y', 'n', 'r'])
-            if c == 'y':
-                break
-            elif c == 'n':
-                raise CancelProcessorError(self.container.file_name)
-            elif c == 'r':
-                self.output_command = self.build_command()
-
 
     def execute(self):
         """Start processing the container."""
 
-        self.process = subprocess.Popen(self.output_command, stderr=subprocess.PIPE,
+        self.process = subprocess.Popen(self.build_command(), stderr=subprocess.PIPE,
             universal_newlines=True)
+
+    def display(self):
+        """Echo a pretty representation of the processing actions to take."""
+
+        self.container.display()
+        click.echo(click.style('Filmalize Actions:', fg='cyan', bold=True))
+        for stream in self.streams:
+            header = 'Stream {}: '.format(stream)
+            info = self.container.streams[stream].option_summary
+            click.echo(click.style(header, fg='green', bold=True) + click.style(info, fg='yellow'))
+        click.echo(click.style('Output File: {}'.format(self.output_name), fg='magenta'))
 
     def build_command(self):
         """Build the ffmpeg command to process this container.
 
-        Prompt the user to pick which streams to include, then generate
-        appropriate ffmpeg options to process those streams. Prompt the user
-        for an output filename.
+        Generate appropriate ffmpeg options to process the selected streams.
 
         Returns:
-            list: The ffmpeg command to process this container.
+            list: The ffmpeg command and options to execute.
 
         """
 
-        output_streams = [self.container.streams[s] for s in self.select_streams()]
         command = ['/usr/bin/ffmpeg', '-nostdin', '-progress', self.temp_file.name, '-v', 'error',
             '-y', '-i', self.container.file_name]
-        for index, subtitle in self.container.subtitle_files.items():
-            command.extend(['-i', subtitle.file_name])
-        self.audio_streams = 0
-        self.video_streams = 0
-        self.subtitle_streams = 0
+        for subtitle in self.container.subtitle_files.values():
+            command.extend(['-sub_charenc', subtitle.encoding, '-i', subtitle.file_name])
+        for stream in self.streams:
+            command.extend(['-map', '0:{}'.format(stream)])
+        for subtitle in self.container.subtitle_files.keys():
+            command.extend(['-map' '{}:0'.format(subtitle)])
+        audio_streams = 0
+        video_streams = 0
+        subtitle_streams = 0
+        output_streams = [self.container.streams[s] for s in self.streams]
         for stream in output_streams:
             if stream.type == 'video':
-                command.extend(self.add_video_options(stream))
+                command.extend(['-c:v:{}'.format(video_streams)])
+                video_streams += 1
             elif stream.type == 'audio':
-                command.extend(self.add_audio_options(stream))
+                command.extend(['-c:a:{}'.format(audio_streams)])
+                audio_streams += 1
             elif stream.type == 'subtitle':
-                command.extend(self.add_subtitle_options(stream))
-        for index, subtitle in self.container.subtitle_files.items():
-            command.extend(self.add_subtitle_file_options(subtitle))
-        command.extend(self.add_filename())
+                command.extend(['-c:s:{}'.format(subtitle_streams)])
+                subtitle_streams += 1
+            command.extend(stream.options)
+        for subtitle in self.container.subtitle_files.values():
+            command.extend(['-c:s:{}'.format(subtitle_streams)])
+            subtitle_streams += 1
+            command.extend(subtitle.options)
+        command.extend([os.path.join(os.path.dirname(self.container.file_name), self.output_name)])
         return command
-
-    def select_streams(self):
-        """Which streams from the input file does the user want in the output.
-
-        If there are only two streams, return those. Otherwise, ask the user
-        which streams to include.
-
-        Returns:
-            list: The streams to include in the output
-
-        """
-
-        if len(self.container.streams.keys()) == 2:
-            return self.container.streams.keys()
-
-        audio, video = None, None
-        for index, stream in self.container.streams.items():
-            if audio == None and stream.type == 'audio':
-                audio = index
-            elif video == None and stream.type == 'video':
-                video = index
-        if yes_no('Use streams {} and {}?'.format(video, audio)):
-                return([video, audio])
-
-        acceptable_responses = self.container.streams.keys()
-        ask = 'Which streams would you like?'
-        prompt = ask + ' [{}]'.format(' '.join([str(r) for r in acceptable_responses]))
-        while True:
-            responses = click.prompt(prompt).strip().split(' ')
-            acceptable, video, audio = True, False, False
-            for r in responses:
-                if not r.isdigit():
-                    acceptable = False
-                    break
-                response = int(r)
-                if response not in acceptable_responses:
-                    acceptable = False
-                    break
-                if self.container.streams[response].type == 'audio':
-                    audio = True
-                elif self.container.streams[response].type == 'video':
-                    video = True
-            if acceptable and audio and video:
-                return [int(r) for r in responses]
-            else:
-                click.echo('Invalid input. Separate streams with a single space.')
-                click.echo('You must include at least one audio and one video stream.')
-
-    def add_video_options(self, stream):
-        """Add options for copying or transcoding a specified video stream to
-        the output_command.
-
-        If the input stream is already h264, it is simply copied to the output.
-        Otherwise, the stream will be transcoded. If so, the user is offered the
-        option of specifying a crf, or accepting the default of 18.
-
-        Args:
-            stream (Stream): Video Stream to be added to the output.
-
-        Returns:
-            list: The ffmpeg options for the given video stream.
-
-        """
-
-        command = ['-map', '0:{}'.format(stream.index)]
-        if stream.codec == 'h264':
-            command.extend(['-c:v:{}'.format(self.video_streams), 'copy'])
-        else:
-            click.echo('Stream {} (video) needs to be transcoded.'.format(stream.index))
-            if not yes_no('Use default crf (18)?'):
-                crf = click.prompt('Specify crf [0-51]', type=click.IntRange(0, 52))
-            else:
-                crf = 18
-            command.extend(['-c:v:{}'.format(self.video_streams), 'libx264', '-preset', 'slow',
-                '-crf', str(crf), '-pix_fmt', 'yuv420p'])
-
-        self.video_streams += 1
-        return command
-
-    def add_audio_options(self, stream):
-        """Add options for copying or transcoding a specified audio stream to
-        the output_command.
-
-        If the input stream is already aac, it is simply copied to the output.
-        Otherwise, the stream will be transcoded. If the input stream's bitrate
-        cannot be detected, the user is offerred the  option of specifying a
-        bitrate, or accepting the default of 384kib/s.
-
-        Args:
-            stream (Stream): Audio Stream to be added to the output.
-
-        Returns:
-            list: The ffmpeg options for the given audio stream.
-
-        """
-
-        command = ['-map', '0:{}'.format(stream.index)]
-        if stream.codec == 'aac':
-            command.extend(['-c:a:{}'.format(self.audio_streams), 'copy'])
-        elif stream.bitrate:
-            bitrate = stream.bitrate
-            command.extend(['-c:a:{}'.format(self.audio_streams), 'aac', '-b:a',
-                '{}k'.format(bitrate)])
-        else:
-            click.echo('Stream {} (audio) needs to be transcoded.'.format(stream.index))
-            if not yes_no('Use default bitrate (384kib/s)?'):
-                while True:
-                    r = click.prompt('Specify bitrate (just the number, units are kib/s)')
-                    if r.isdigit():
-                        bitrate = int(r)
-                        break
-                    else:
-                        click.echo('Invalid input, try again...')
-            else:
-                bitrate = 384
-            command.extend(['-c:a:{}'.format(self.audio_streams), 'aac',
-                '-b:a:{}'.format(self.audio_streams), '{}k'.format(bitrate)])
-
-        self.audio_streams += 1
-        return command
-
-    def add_subtitle_options(self, stream):
-        """Add options for including a specified subtitle stream to the
-        output_command. Subtitles will be converted to the mov_text format.
-
-        Args:
-            stream (Stream): Subtitle Stream to be added to the output.
-
-        Returns:
-            list: The ffmpeg options for the given subtitle stream.
-
-        """
-
-        command = ['-map', '0:{}'.format(stream.index)]
-        command.extend(['-c:s:{}'.format(self.subtitle_streams), 'mov_text'])
-        self.subtitle_streams += 1
-        return command
-
-    def add_subtitle_file_options(self, subtitle):
-        """Add options for including a specified subtitle stream to the
-        output_command. Subtitles will be converted to the mov_text format.
-
-        Args:
-            subtitle (SubtitleFile): The subtitle file for which to add
-                options to the ffmpeg command.
-
-        Returns:
-            list: The ffmpeg options for the given subtitle file.
-
-        """
-
-        command = ['-map', '{}:0'.format(subtitle.index)]
-        command.extend(['-c:s:{}'.format(self.subtitle_streams), 'mov_text'])
-        self.subtitle_streams += 1
-        return command
-
-    def add_filename(self):
-        """Add output filename to the output_command.
-
-        Ask the user if they would like to change the output file name. Allow
-        them to specify one if they so desire.
-
-        Returns:
-            list: Comprising one element; the output filename.
-
-        """
-
-        name = pathlib.PurePath(self.file_name).stem
-        if not yes_no('Use default output filename: {} (.mp4)?'.format(name)):
-            name = click.prompt('Specify filename (without extension)').strip()
-
-        output_name = [os.path.join(os.path.basename(self.file_name), name + '.mp4')]
-        return output_name
-
 
 def exclusive(ctx_params, exclusive_params, error_message):
     """Utility function for enforcing exclusivity between options.
@@ -518,11 +431,12 @@ def yes_no(prompt):
         else:
             click.echo('Invalid input, try again...')
 
-def multiple_choice(key, prompt, responses):
+def multiple_choice(prompt, responses, key=None):
     """Utility function to ask the user a multple choice question."""
 
     while True:
-        click.echo('Key: {}'.format(key))
+        if key:
+            click.echo('Key: {}'.format(key))
         full_prompt = prompt + ' [{}]'.format('/'.join(responses))
         click.echo(full_prompt, nl=False)
         c = click.getchar()
@@ -536,7 +450,7 @@ def add_subtitles():
     """Add an external subtitle file. Allow the user to set a custom encoding.
 
     Raises:
-        CancelSubtitleError: If the user cancels the operation.
+        UserCancelError: If the user cancels adding a subtitle file.
 
     Returns:
         string: The subtitle file name
@@ -546,8 +460,8 @@ def add_subtitles():
 
     sub_file, encoding = sub_file_prompt()
     while True:
-        c = multiple_choice('accept / retry / specify custom / cancel', 'Continue?',
-            ['a', 'r', 's', 'c'])
+        c = multiple_choice('Continue?', ['a', 'r', 's', 'c'],
+            'accept / retry / specify custom / cancel')
         if c == 'a':
             return sub_file, encoding
         elif c == 'r':
@@ -556,7 +470,7 @@ def add_subtitles():
             encoding = click.prompt('Enter custom encoding')
             click.echo('Custom encoding specified: {}'.format(encoding))
         elif c == 'c':
-            raise CancelSubtitleError('Cancelled subtitle file addition.')
+            raise UserCancelError('Cancelled subtitle file addition.')
 
 def sub_file_prompt():
     """Prompt the user to specify a subtitle file.
@@ -569,15 +483,94 @@ def sub_file_prompt():
         string: The subtitle file encoding
 
     """
+    try:
+        sub_file = click.prompt('Enter subtitle file name', type=click.Path(exists=True,
+            dir_okay=False, readable=True))
+    except click.exceptions.Abort:
+        raise UserCancelError('Cancelled adding subtitle file.')
 
-    sub_file = click.prompt('Enter subtitle file name', type=click.Path(exists=True,
-    dir_okay=False, readable=True))
     with open(sub_file, mode='rb') as f:
         line = f.readline()
     detected = chardet.detect(line)
     click.echo('Subtitle file encoding detected as {}, with {}% confidence'.format(
         detected['encoding'], int(detected['confidence']) * 100))
     return sub_file, detected['encoding']
+
+def select_streams(processor):
+    """Prompt the user to select streams for processing.
+
+    Args:
+        processor (Processor): The Processor that the user will select Streams
+        from it's Container.
+
+    Raises:
+        UserCancelError: If the user cancels selecting streams.
+
+    """
+
+    try:
+        processor.container.display()
+        query = 'Which streams would you like'
+        streams = click.prompt(query, type=SelectedStreams(processor.container))
+        processor.streams = streams
+    except click.exceptions.Abort:
+        raise UserCancelError('Cancelled selecting streams.')
+
+def edit_stream_options(container):
+    """Prompt the user to select a stream. Edit that stream's options.
+
+    Args:
+        container (Container): The Container with streams to be edited
+
+    Raises:
+        UserCancelError: If the user cancels editing a stream.
+
+    """
+
+    container.display()
+    indices = [str(i) for i in container.streams.keys()]
+    stream = container.streams[int(multiple_choice('Select a stream:', indices))]
+    if stream.type == 'video':
+        if stream.codec == 'h264' and yes_no('Copy stream?'):
+            stream.generate_video_options()
+        elif yes_no('Use default crf?'):
+            stream.generate_video_options(18)
+        else:
+            crf = click.prompt('Enter crf', type=click.IntRange(0, 51))
+            stream.generate_video_options(crf)
+    elif stream.type == 'audio':
+        if stream.codec == 'aac' and yes_no('Copy stream?'):
+            stream.generate_audio_options()
+        elif stream.bitrate and yes_no('Use source bitrate ({}kib/s)?'.format(stream.bitrate)):
+            stream.generate_audio_options(stream.bitrate)
+        elif yes_no('Use default bitrate (384kib/s)?'):
+            stream.generate_audio_options(384)
+        else:
+            br = click.prompt('Enter bitrate', type=click.IntRange(0, 5000))
+            stream.generate_audio_options(br)
+    else:
+        click.echo('Sorry: you selected a stream that cannot be edited.')
+
+def change_file_name(processor):
+    """Prompt the user to specify a name for the output file.
+
+    Args:
+        porcessor (Processor): The Processor that will make the file.
+
+    Raises:
+        UserCancelError: If the user cancels entering a name.
+
+    """
+
+    default = pathlib.PurePath(processor.container.file_name).stem + '.mp4'
+    if yes_no('Use default file name ({})?'.format(default)):
+        processor.output_name = default
+    else:
+        try:
+            name = click.prompt('Enter output file name (without extension)')
+            processor.output_name = name + '.mp4'
+        except click.exceptions.Abort:
+            raise UserCancelError('Cancelled editing file name.')
 
 def build_containers(file_list):
     """Utility function to build a list of Container objets given a list of
@@ -655,23 +648,31 @@ def convert(ctx):
     containers = build_containers(ctx.obj['FILES'])
     processors = []
     for container in containers:
+        processor = Processor(container)
         while True:
-            container.display()
-            c = multiple_choice('yes / no / add subtitles', 'Convert file?', ['y', 'n', 'a'])
-            if c == 'a':
-                try:
+            processor.display()
+            c = multiple_choice('Convert file?', ['y', 'n', 'a', 's', 'e', 'c', 'p'],
+                'yes/no/add subtitles/select streams/edit stream/change filename/print command')
+            try:
+                if c == 'n':
+                    raise UserCancelError('Cancelled converting {}'.format(container.file_name))
+                elif c == 'a':
                     sub_file, encoding = add_subtitles()
                     container.add_subtitle_file(sub_file, encoding)
-                except CancelSubtitleError as e:
-                    click.echo('Warning: {}'.format(e.message))
+                elif c == 's':
+                    select_streams(processor)
+                elif c == 'e':
+                    edit_stream_options(container)
+                elif c == 'c':
+                    change_file_name(processor)
+                elif c == 'p':
+                    click.echo(click.style('Command:', fg='cyan', bold=True))
+                    click.echo(' '.join(processor.build_command()))
+            except UserCancelError as e:
+                click.echo('Warning: {}'.format(e.message))
             if c == 'y':
-                try:
-                    processor = Processor(container)
-                    processor.execute()
-                    processors.append(processor)
-                except CancelProcessorError as e:
-                    click.echo(click.style('Warning: Cancelled converting {}'.format(e.file_name),
-                        fg='red'))
+                processor.execute()
+                processors.append(processor)
             if c in ['y', 'n']:
                 break
 
@@ -684,7 +685,7 @@ def convert(ctx):
                     if processor.process.returncode:
                         click.echo(click.style('Warning: ffmpeg error while converting {}'.format(
                             processor.container.file_name), fg='red'))
-                        click.echo(processor.process.communicate()[1].strip('\n'))
+                        click.echo(processor.process.communicate()[1].strip(os.linesep))
                     bar.update(processor.container.microseconds - processor.progress)
                     processors.remove(processor)
                 else:
@@ -693,7 +694,7 @@ def convert(ctx):
                     ms = 0
                     for line in reversed(line_list):
                         if line.split('=')[0] == 'out_time_ms':
-                            if line.split('=')[1].strip('\n').isdigit():
+                            if line.split('=')[1].strip(os.linesep).isdigit():
                                 ms = int(line.split('=')[1])
                                 break
                     if ms:
