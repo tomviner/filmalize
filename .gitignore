@@ -12,3 +12,9 @@ __pycache__/
 
 # Test Installs
 *.egg-info
+
+# VS Code Prefs
+.vscode/
+
+# Pylint prefs
+.pylintrc

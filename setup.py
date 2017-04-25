@@ -5,7 +5,7 @@ setup(
     version='0.0.1',
     py_modules=['filmalize'],
     install_requires=[
-        'Click'
+        'click', 'bitmath', 'colorama', 'chardet'
     ],
     entry_points='''
         [console_scripts]

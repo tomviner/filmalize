@@ -10,6 +10,7 @@ Todo:
     * Tests
     * Status interrupts
     * Specify metadata edits
+    * TVDB API?
     * Install / packaging
 
 """

@@ -1,4 +1,3 @@
-pip-tools
 click
 bitmath
 colorama
