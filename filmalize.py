@@ -83,60 +83,40 @@ class SelectedStreams(click.ParamType):
                       'one video stream.')
 
 
-class Container:
+class Container(object):
     """Multimedia container file object."""
 
-    def __init__(self, file_name):
-        """Initialize container object.
-
-        First, attempt to probe the file with ffprobe. If the probe is
-        succesful, finish instatiation using the results of the probe,
-        building Stream instances as necessary.
+    def __init__(self, file_name, duration, streams, subtitle_files=None,
+                 title=None, size=None, bitrate=None, container_format=None):
+        """Populate container object instance variables.
 
         Args:
             file_name (str): The multimedia container file to represent.
-
-        Raises:
-            ProbeError: If ffprobe does not return cleanly.
+            duration (float): The duration of the streams in the container in
+                seconds.
+            streams (dict): A dictionary containing Stream objects as values
+                keyed by their index values.
+            subtitle_files (list): Optional list of SubtitleFile objects.
+            title (str): Optional container title label.
+            size (float): Optional container size label in MiBs.
+            bitrate (float): Optional container bitrate label in Mib/s.
+            container_format (str): Optional container format label. Regardless
+                of the presence of this label, the container must be a format
+                that ffmpeg can process.
 
         """
 
         self.file_name = file_name
-        [self.title, self.duration, self.length, self.size, self.bitrate,
-         self.format] = ['' for _ in range(6)]
-        self.microseconds = 1
-        self.streams = {}
-        self.subtitle_files = []
+        self.duration = duration
+        self.streams = streams
+        self.subtitle_files = subtitle_files if subtitle_files else []
+        self.title = title
+        self.size = size
+        self.bitrate = bitrate
+        self.container_format = container_format
 
-        probe_response = subprocess.run(
-            ['/usr/bin/ffprobe', '-v', 'error', '-show_format',
-             '-show_streams', '-of', 'json', self.file_name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        if probe_response.returncode:
-            raise ProbeError(file_name, probe_response.stderr.decode('utf-8')
-                             .strip(os.linesep))
-        else:
-            probe_info = json.loads(probe_response.stdout)
-            if ('tags' in probe_info['format']
-                    and 'title' in probe_info['format']['tags']):
-                self.title = probe_info['format']['tags']['title']
-            if 'duration' in probe_info['format']:
-                duration = float(probe_info['format']['duration'])
-                self.microseconds = int(duration * 1000000)
-                self.length = datetime.timedelta(seconds=round(duration, 0))
-            if 'size' in probe_info['format']:
-                file_bytes = int(probe_info['format']['size'])
-                self.size = round(bitmath.MiB(bytes=file_bytes).value, 2)
-            if 'bit_rate' in probe_info['format']:
-                bits = int(probe_info['format']['bit_rate'])
-                self.bitrate = round(bitmath.Mib(bits=bits).value, 2)
-            if 'format_name' in probe_info['format']:
-                self.container_format = probe_info['format']['format_name']
-
-            for stream in probe_info['streams']:
-                self.streams[int(stream['index'])] = Stream(stream)
+        self.microseconds = int(duration * 1000000)
+        self.length = datetime.timedelta(seconds=round(duration, 0))
 
     def add_subtitle_file(self, file_name, encoding):
         """Add an external subtitle file. Allow the user to set a custom
@@ -164,7 +144,7 @@ class Container:
         if self.size:
             file_description.append('Size: {}MiB'.format(self.size))
         if self.bitrate:
-            file_description.append('Bitrate: {}MiB/s'.format(self.bitrate))
+            file_description.append('Bitrate: {}Mib/s'.format(self.bitrate))
         if self.container_format:
             file_description.append('Container: {}'.format(
                 self.container_format))
@@ -177,68 +157,58 @@ class Container:
             subtitle.display()
 
 
-class Stream:
+class Stream(object):
     """Multimedia stream object."""
 
-    def __init__(self, stream_info):
-        """Initialize stream object.
-
-        Instantiate Stream instance variables, when available, using the info
-        passed in stream_info, defaulting to None if not specified. Generate
-        default ffmpeg options.
+    def __init__(self, index, stream_type, codec, language=None, default=None,
+                 title=None, resolution=None, bitrate=None, scan=None,
+                 channels=None, crf=None, custom_bitrate=None):
+        """Populate Stream object instance variables.
 
         Args:
-            stream_info (dict): Stream information as reported by ffprobe.
+            index (int): The stream index.
+            stream_type (str): The multimedia type of the stream. Streams will
+                be included only if they are of type 'audio', 'video', or
+                'subtitle'.
+            codec (str): The codec with which the stream is encoded. Must be a
+                codec that ffmpeg will recognize.
+            language (str): Optional language name or abbr.
+            default (bool): Optional indication of this stream being the
+                default of it's type.
+            title (str): Optional stream title label.
+            resolution (str): Optional stream resolution label.
+            bitrate (float): Optional (video) stream bitrate in Mib/s.
+            bitrate (int): Optional (audio) stream bitrate in Kib/s.
+            scan (str): Optional (video) stream scanning information
+                (progressive scan or interlaced).
+            channels (str): Optional (audio) channel information (stereo, 5.1,
+                etc.).
+            crf (int): Optional (video) stream Constant Rate Factor.
+            custom_bitrate (int): Optional (audio) stream output bitrate to
+                transcode to.
 
         """
 
-        [self.type, self.name, self.language, self.default, self.title,
-         self.resolution, self.bitrate, self.scan, self.channels,
-         self.bitrate] = [None for _ in range(10)]
-        self.index = stream_info['index']
-        self.crf, self.obr = 0, 0
-        self.option_summary = ''
-
-        if 'codec_type' in stream_info:
-            self.type = stream_info['codec_type']
-        if 'codec_name' in stream_info:
-            self.codec = stream_info['codec_name']
-        if 'tags' in stream_info and 'language' in stream_info['tags']:
-            self.language = stream_info['tags']['language']
-        if ('disposition' in stream_info
-                and 'default' in stream_info['disposition']):
-            self.default = bool(stream_info['disposition']['default'])
-        if 'tags' in stream_info and 'title' in stream_info['tags']:
-            self.title = stream_info['tags']['title']
-
-        if self.type == 'video':
-            if 'height' in stream_info and 'width' in stream_info:
-                width = str(stream_info['width'])
-                height = str(stream_info['height'])
-                self.resolution = width + 'x' + height
-            elif ('coded_height' in stream_info
-                  and 'coded_width' in stream_info):
-                width = str(stream_info['coded_width'])
-                height = str(stream_info['coded_height'])
-                self.resolution = width + 'x' + height
-            if 'bit_rate' in stream_info:
-                bits = int(stream_info['bit_rate'])
-                self.bitrate = round(bitmath.Mib(bits=bits).value, 2)
-            if 'field_order' in stream_info:
-                self.scan = stream_info['field_order']
-        elif self.type == 'audio':
-            if 'channel_layout' in stream_info:
-                self.channels = stream_info['channel_layout']
-            if 'bit_rate' in stream_info:
-                bits = int(stream_info['bit_rate'])
-                bit_rate = round(bitmath.Kib(bits=bits).value)
-                self.bitrate = bit_rate
+        self.index = index
+        self.type = stream_type
+        self.codec = codec
+        self.language = language
+        self.default = default
+        self.title = title
+        self.resolution = resolution
+        self.bitrate = bitrate
+        self.scan = scan
+        self.channels = channels
+        self.crf = crf
+        self.custom_bitrate = custom_bitrate
+        self.option_summary = None
 
     def build_options(self, number=0):
         """Generate ffmpeg codec/bitrate options for this Stream.
 
-        The options generated will use custom values, if specified, or the
-        default values.
+        The options generated will use custom values for video CRF or audio
+        bitrate, if specified, or the default values. The option_summary is
+        updated to reflect the selected options.
 
         Args:
             number (int): The number of Streams of this type that have been
@@ -262,9 +232,9 @@ class Stream:
                 self.option_summary = 'copy'
         elif self.type == 'audio':
             options.extend(['-c:a:{}'.format(number)])
-            if self.obr or self.codec != 'aac':
-                if self.obr:
-                    bitrate = self.obr
+            if self.custom_bitrate or self.codec != 'aac':
+                if self.custom_bitrate:
+                    bitrate = self.custom_bitrate
                 else:
                     bitrate = self.bitrate if self.bitrate else 384
                 options.extend(['aac', '-b:a:{}'.format(number),
@@ -316,7 +286,7 @@ class Stream:
             click.echo('    ' + ' | '.join(stream_specs))
 
 
-class SubtitleFile:
+class SubtitleFile(object):
     """Subtitle file object."""
 
     def __init__(self, file_name, encoding):
@@ -332,7 +302,7 @@ class SubtitleFile:
         click.echo('  Encoding: {}'.format(self.encoding))
 
 
-class Processor:
+class Processor(object):
     """Container processor object."""
 
     def __init__(self, container):
@@ -483,6 +453,109 @@ def multiple_choice(prompt, responses, key=None):
             click.echo('Invalid input, try again...')
 
 
+def build_stream(stream_info):
+    """Build a Stream instance based on ffprobe stream information.
+
+        Args:
+            stream_info (dict): Stream information as reported by ffprobe.
+
+        Returns:
+            Stream: Instance populated by ffprobe stream information.
+
+    """
+
+    [language, default, title, resolution, bitrate, scan,
+     channels] = [None for _ in range(7)]
+
+    index = stream_info['index']
+    stream_type = stream_info['codec_type']
+    codec = stream_info['codec_name']
+
+    if 'tags' in stream_info and 'language' in stream_info['tags']:
+        language = stream_info['tags']['language']
+    if ('disposition' in stream_info
+            and 'default' in stream_info['disposition']):
+        default = bool(stream_info['disposition']['default'])
+    if 'tags' in stream_info and 'title' in stream_info['tags']:
+        title = stream_info['tags']['title']
+
+    if stream_type == 'video':
+        if 'height' in stream_info and 'width' in stream_info:
+            width = str(stream_info['width'])
+            height = str(stream_info['height'])
+            resolution = width + 'x' + height
+        elif ('coded_height' in stream_info
+              and 'coded_width' in stream_info):
+            width = str(stream_info['coded_width'])
+            height = str(stream_info['coded_height'])
+            resolution = width + 'x' + height
+        if 'bit_rate' in stream_info:
+            bits = int(stream_info['bit_rate'])
+            bitrate = round(bitmath.Mib(bits=bits).value, 2)
+        if 'field_order' in stream_info:
+            scan = stream_info['field_order']
+    elif stream_type == 'audio':
+        if 'channel_layout' in stream_info:
+            channels = stream_info['channel_layout']
+        if 'bit_rate' in stream_info:
+            bits = int(stream_info['bit_rate'])
+            bitrate = round(bitmath.Kib(bits=bits).value)
+
+    return Stream(index, stream_type, codec, language=language,
+                  default=default, title=title, resolution=resolution,
+                  bitrate=bitrate, scan=scan, channels=channels)
+
+
+def build_container(file_name):
+    """Build a Container instance from a given file.
+
+    Attempt to probe the file with ffprobe. If the probe is succesful, finish
+    instatiation using the results of the probe, building Stream instances as
+    necessary.
+
+    Args:
+        file_name (str): The file (a multimedia container) to represent.
+
+    Returns:
+        Container: Instance representing the given file.
+
+    Raises:
+        ProbeError: If ffprobe is unable to successfully probe the file.
+
+    """
+
+    probe_response = subprocess.run(
+        ['/usr/bin/ffprobe', '-v', 'error', '-show_format', '-show_streams',
+         '-of', 'json', file_name],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    if probe_response.returncode:
+        raise ProbeError(file_name, probe_response.stderr.decode('utf-8')
+                         .strip(os.linesep))
+    else:
+        title, size, bitrate, container_format = [None for _ in range(4)]
+        probe_info = json.loads(probe_response.stdout)
+
+        duration = float(probe_info['format']['duration'])
+        streams = {int(stream['index']): build_stream(stream)
+                   for stream in probe_info['streams']}
+
+        if ('tags' in probe_info['format']
+                and 'title' in probe_info['format']['tags']):
+            title = probe_info['format']['tags']['title']
+        if 'size' in probe_info['format']:
+            file_bytes = int(probe_info['format']['size'])
+            size = round(bitmath.MiB(bytes=file_bytes).value, 2)
+        if 'bit_rate' in probe_info['format']:
+            bits = int(probe_info['format']['bit_rate'])
+            bitrate = round(bitmath.Mib(bits=bits).value, 2)
+        if 'format_name' in probe_info['format']:
+            container_format = probe_info['format']['format_name']
+
+    return Container(file_name, duration, streams, title=title, size=size,
+                     bitrate=bitrate, container_format=container_format)
+
+
 def add_subtitles(container):
     """Add an external subtitle file. Allow the user to set a custom encoding.
 
@@ -618,15 +691,15 @@ def edit_stream_options(container):
             stream.crf = crf
     elif stream.type == 'audio':
         if stream.codec == 'aac' and yes_no('Copy stream?'):
-            stream.obr = 0
+            stream.custom_bitrate = None
         elif stream.bitrate and yes_no('Use source bitrate '
                                        '({}Kib/s)?'.format(stream.bitrate)):
-            stream.obr = stream.bitrate
+            stream.custom_bitrate = stream.bitrate
         elif yes_no('Use default bitrate (384Kib/s)?'):
-            stream.obr = 384
+            stream.custom_bitrate = 384
         else:
-            stream.obr = click.prompt('Enter bitrate',
-                                      type=click.IntRange(0, 5000))
+            stream.custom_bitrate = click.prompt('Enter bitrate',
+                                                 type=click.IntRange(0, 5000))
 
 
 def change_file_name(processor):
@@ -671,7 +744,7 @@ def build_containers(file_list):
     containers = []
     for file in file_list:
         try:
-            container = Container(file)
+            container = build_container(file)
             containers.append(container)
         except ProbeError as _e:
             click.secho('Warning: Unable to process {}'.format(_e.file_name),
