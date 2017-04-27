@@ -410,9 +410,16 @@ class Stream(object):
 class SubtitleFile(object):
     """Subtitle file object."""
 
-    def __init__(self, file_name, encoding):
+    def __init__(self, file_name, encoding=None):
+        """Populate SubtitleFile object instance variables.
+
+        Args:
+            file_name (str): The subtitle file to represent.
+            encoding (str, optional): The file encoding of the subtitle file.
+
+        """
         self.file_name = file_name
-        self.encoding = encoding
+        self.encoding = encoding if encoding else self.get_encoding()
         self.options = ['mov_text']
         self.option_summary = 'transcode -> mov_text'
 
@@ -421,6 +428,18 @@ class SubtitleFile(object):
 
         click.secho('Subtitle File: {}'.format(self.file_name), fg='magenta')
         click.echo('  Encoding: {}'.format(self.encoding))
+
+    def get_encoding(self):
+        """Guess the encoding of the subtitle file.
+
+        Returns:
+            str: The best guess for the subtitle file encoding.
+
+        """
+        with open(self.file_name, mode='rb') as _file:
+            line = _file.readline()
+        detected = chardet.detect(line)
+        return detected['encoding']
 
 
 def exclusive(ctx_params, exclusive_params, error_message):
@@ -704,7 +723,8 @@ def edit_stream_options(container):
 
     container.display()
     indexes = [str(stream.index) for stream in container.streams
-               if stream.type in ['audio', 'video']]
+               if (stream.type in ['audio', 'video']
+                   and stream.index in container.selected)]
 
     try:
         stream = container.streams_dict[
