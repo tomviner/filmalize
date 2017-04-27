@@ -49,38 +49,38 @@ class UserCancelError(Error):
         self.message = message if message else ''
 
 
+class StreamSelectionError(Error):
+    """Custom Exception to raise when Container.selected is set to include
+    indexes that are not present in the Container.streams"""
+
+    def __init__(self, offending_index):
+        self.message = ('This Container contains no Stream with '
+                        'index {}.'.format(offending_index))
+
+
 class SelectedStreams(click.ParamType):
     """Custom Click parameter type to validate a selection of streams from a
     Container."""
 
     def __init__(self, container):
-        """Initialize type: get streams from container."""
+        """Initialize type: Set working Container."""
 
-        self.streams = container.streams_dict
+        self.container = container
 
     def convert(self, value, param, ctx):
         """Validate that input stream indices are acceptable. Return indices
         formatted as a list of integers."""
 
-        selected = value.strip().split(' ')
-        video, audio = False, False
-        for selection in selected:
-            if not selection.isdigit():
-                self.fail('Invalid input. Enter stream indices separated by a '
-                          'single space.')
-            stream = int(selection)
-            if stream not in self.streams.keys():
-                self.fail('Invalid input. {} is not an available stream '
-                          'index.'.format(stream))
-            elif self.streams[stream].type == 'audio':
-                audio = True
-            elif self.streams[stream].type == 'video':
-                video = True
-        if audio and video:
-            return [int(s) for s in selected]
+        try:
+            selected = [int(index) for index in value.strip().split(' ')]
+            self.container.acceptable_streams(selected)
+        except StreamSelectionError as _e:
+            self.fail(_e.message)
+        except (ValueError, TypeError):
+            self.fail('Invalid input. Enter stream indexes separated by a '
+                      'single space')
         else:
-            self.fail('Invalid input. You must include at least one audio and '
-                      'one video stream.')
+            return selected
 
 
 class Container(object):
@@ -89,7 +89,7 @@ class Container(object):
     def __init__(self, file_name, duration, streams, subtitle_files=None,
                  title=None, size=None, bitrate=None, container_format=None,
                  selected=None, output_name=None):
-        """Populate container object instance variables.
+        """Populate container object properties and instance variables.
 
         Args:
             file_name (str): The multimedia container file to represent.
@@ -122,8 +122,8 @@ class Container(object):
         self.size = size
         self.bitrate = bitrate
         self.container_format = container_format
-        self.selected = selected if selected else self.default_streams()
         self.output_name = output_name if output_name else self.default_name()
+        self.selected = selected if selected else self.default_streams()
 
         self.microseconds = int(duration * 1000000)
         self.length = datetime.timedelta(seconds=round(duration, 0))
@@ -134,8 +134,29 @@ class Container(object):
     @property
     def streams_dict(self):
         """dict: The streams keyed by their indexes."""
+        return {stream.index: stream for stream in self.streams}
 
-        return {s.index: s for s in self.streams}
+    def acceptable_streams(self, index_list):
+        """Determine if all of the indexes in a list match a Stream in
+             self.streams.
+
+        Args:
+            index_list (list of int): Indexes that may correspond to Streams.
+
+        Returns:
+            bool: True if all of the indexes are valid.
+
+        Raises:
+            StreamSelectionError: If list contains an index that does not
+                correspond to any Stream in self.streams.
+
+        """
+
+        keys = self.streams_dict.keys()
+        for index in index_list:
+            if index not in keys:
+                raise StreamSelectionError(index)
+        return True
 
     def default_streams(self):
         """Return a list of the indexes of the first video and audio stream."""
