@@ -21,7 +21,7 @@ import json
 import datetime
 import tempfile
 import time
-import pathlib
+from pathlib import PurePath
 
 import click
 import bitmath
@@ -87,7 +87,8 @@ class Container(object):
     """Multimedia container file object."""
 
     def __init__(self, file_name, duration, streams, subtitle_files=None,
-                 title=None, size=None, bitrate=None, container_format=None):
+                 title=None, size=None, bitrate=None, container_format=None,
+                 selected=None, output_name=None):
         """Populate container object instance variables.
 
         Args:
@@ -103,6 +104,11 @@ class Container(object):
             container_format (str): Optional container format label. Regardless
                 of the presence of this label, the container must be a format
                 that ffmpeg can process.
+            selected (list): Optional list of integer stream indexes. If not
+                specified, the first audio and video stream will be selected.
+            output_name (str): Optional output file name. If not specified, the
+                output file name will be set to the input file, but with '.mp4'
+                replacing the extension.
 
         """
 
@@ -114,9 +120,34 @@ class Container(object):
         self.size = size
         self.bitrate = bitrate
         self.container_format = container_format
+        self.selected = selected if selected else self.default_streams()
+        self.output_name = output_name if output_name else self.default_name()
 
         self.microseconds = int(duration * 1000000)
         self.length = datetime.timedelta(seconds=round(duration, 0))
+        self.temp_file = tempfile.NamedTemporaryFile()
+        self.progress = 0
+        self.process = None
+
+    def default_streams(self):
+        """Return a list of the indexes of the first video and audio stream."""
+
+        streams = []
+        audio, video = None, None
+        for index, stream in self.streams.items():
+            if not audio and stream.type == 'audio':
+                audio = True
+                streams.append(index)
+            elif not video and stream.type == 'video':
+                video = True
+                streams.append(index)
+
+        return streams
+
+    def default_name(self):
+        """Return a string; self.file_name with a '.mp4' ending."""
+
+        return PurePath(self.file_name).stem + '.mp4'
 
     def add_subtitle_file(self, file_name, encoding):
         """Add an external subtitle file. Allow the user to set a custom
@@ -155,6 +186,67 @@ class Container(object):
 
         for subtitle in self.subtitle_files:
             subtitle.display()
+
+    def display_conversion(self):
+        """Echo a pretty representation of the conversion actions to take."""
+
+        click.secho('Filmalize Actions:', fg='cyan', bold=True)
+        for stream_num in self.selected:
+            header = 'Stream {}: '.format(stream_num)
+            stream = self.streams[stream_num]
+            stream.build_options()
+            info = stream.option_summary
+            click.echo(click.style(header, fg='green', bold=True)
+                       + click.style(info, fg='yellow'))
+        for subtitle in self.subtitle_files:
+            click.echo(
+                click.style(subtitle.file_name + ': ', fg='green', bold=True)
+                + click.style(subtitle.option_summary, fg='yellow')
+            )
+        click.secho('Output File: {}'.format(self.output_name), fg='magenta')
+
+    def convert(self):
+        """Start the conversion of this container in a subprocess."""
+
+        self.process = subprocess.Popen(
+            self.build_command(),
+            stderr=subprocess.PIPE,
+            universal_newlines=True
+        )
+
+    def build_command(self):
+        """Build the ffmpeg command to process this container.
+
+        Generate appropriate ffmpeg options to process the selected streams.
+
+        Returns:
+            list: The ffmpeg command and options to execute.
+
+        """
+
+        command = ['/usr/bin/ffmpeg', '-nostdin', '-progress',
+                   self.temp_file.name, '-v', 'error', '-y', '-i',
+                   self.file_name]
+        for subtitle in self.subtitle_files:
+            command.extend(['-sub_charenc', subtitle.encoding, '-i',
+                            subtitle.file_name])
+        for stream in self.selected:
+            command.extend(['-map', '0:{}'.format(stream)])
+        for index, _ in enumerate(self.subtitle_files):
+            command.extend(['-map', '{}:0'.format(index + 1)])
+        stream_number = {'video': 0, 'audio': 0, 'subtitle': 0}
+        output_streams = [self.streams[s] for s in self.selected]
+        for stream in output_streams:
+            command.extend(stream.build_options(stream_number[stream.type]))
+            stream_number[stream.type] += 1
+        for subtitle in self.subtitle_files:
+            command.extend(['-c:s:{}'.format(stream_number['subtitle'])])
+            command.extend(subtitle.options)
+            stream_number['subtitle'] += 1
+        command.extend([os.path.join(os.path.dirname(self.file_name),
+                                     self.output_name)])
+
+        return command
 
 
 class Stream(object):
@@ -300,99 +392,6 @@ class SubtitleFile(object):
 
         click.secho('Subtitle File: {}'.format(self.file_name), fg='magenta')
         click.echo('  Encoding: {}'.format(self.encoding))
-
-
-class Processor(object):
-    """Container processor object."""
-
-    def __init__(self, container):
-        """Initialize Processor object.
-
-        Set up default values:
-            Select the first audio and video stream.
-            Use the same file name as the input file, but suffixed with '.mp4'.
-
-        Args:
-            container (Container): The container object to process.
-
-        """
-
-        self.container = container
-        self.temp_file = tempfile.NamedTemporaryFile()
-        self.streams = []
-        self.process = None
-        audio, video = None, None
-        for index, stream in self.container.streams.items():
-            if not audio and stream.type == 'audio':
-                audio = True
-                self.streams.append(index)
-            elif not video and stream.type == 'video':
-                video = True
-                self.streams.append(index)
-        output_stem = pathlib.PurePath(self.container.file_name).stem
-        self.output_name = output_stem + '.mp4'
-        self.progress = 0
-
-    def execute(self):
-        """Start processing the container."""
-
-        self.process = subprocess.Popen(
-            self.build_command(),
-            stderr=subprocess.PIPE,
-            universal_newlines=True
-        )
-
-    def display(self):
-        """Echo a pretty representation of the processing actions to take."""
-
-        self.container.display()
-        click.secho('Filmalize Actions:', fg='cyan', bold=True)
-        for stream_num in self.streams:
-            header = 'Stream {}: '.format(stream_num)
-            stream = self.container.streams[stream_num]
-            stream.build_options()
-            info = stream.option_summary
-            click.echo(click.style(header, fg='green', bold=True)
-                       + click.style(info, fg='yellow'))
-        for subtitle in self.container.subtitle_files:
-            click.echo(
-                click.style(subtitle.file_name + ': ', fg='green', bold=True)
-                + click.style(subtitle.option_summary, fg='yellow')
-            )
-        click.secho('Output File: {}'.format(self.output_name), fg='magenta')
-
-    def build_command(self):
-        """Build the ffmpeg command to process this container.
-
-        Generate appropriate ffmpeg options to process the selected streams.
-
-        Returns:
-            list: The ffmpeg command and options to execute.
-
-        """
-
-        command = ['/usr/bin/ffmpeg', '-nostdin', '-progress',
-                   self.temp_file.name, '-v', 'error', '-y', '-i',
-                   self.container.file_name]
-        for subtitle in self.container.subtitle_files:
-            command.extend(['-sub_charenc', subtitle.encoding, '-i',
-                            subtitle.file_name])
-        for stream in self.streams:
-            command.extend(['-map', '0:{}'.format(stream)])
-        for index, subtitle in enumerate(self.container.subtitle_files):
-            command.extend(['-map', '{}:0'.format(index + 1)])
-        stream_number = {'video': 0, 'audio': 0, 'subtitle': 0}
-        output_streams = [self.container.streams[s] for s in self.streams]
-        for stream in output_streams:
-            command.extend(stream.build_options(stream_number[stream.type]))
-            stream_number[stream.type] += 1
-        for subtitle in self.container.subtitle_files:
-            command.extend(['-c:s:{}'.format(stream_number['subtitle'])])
-            command.extend(subtitle.options)
-            stream_number['subtitle'] += 1
-        command.extend([os.path.join(os.path.dirname(self.container.file_name),
-                                     self.output_name)])
-        return command
 
 
 def exclusive(ctx_params, exclusive_params, error_message):
@@ -643,12 +642,12 @@ def sub_file_prompt():
     return sub_file, detected['encoding']
 
 
-def select_streams(processor):
+def select_streams(container):
     """Prompt the user to select streams for processing.
 
     Args:
-        processor (Processor): The Processor that the user will select Streams
-        from it's Container.
+        container (Container): The Container from which the user will select
+            Streams.
 
     Raises:
         UserCancelError: If the user cancels selecting streams.
@@ -656,11 +655,10 @@ def select_streams(processor):
     """
 
     try:
-        processor.container.display()
+        container.display()
         query = 'Which streams would you like'
-        streams = click.prompt(query,
-                               type=SelectedStreams(processor.container))
-        processor.streams = streams
+        streams = click.prompt(query, type=SelectedStreams(container))
+        container.selected = streams
     except click.exceptions.Abort:
         raise UserCancelError('Cancelled selecting streams.')
 
@@ -679,49 +677,56 @@ def edit_stream_options(container):
     container.display()
     indices = [str(i) for i, s in container.streams.items()
                if s.type in ['audio', 'video']]
-    stream = container.streams[int(multiple_choice('Select a stream:',
-                                                   indices))]
-    if stream.type == 'video':
-        if stream.codec == 'h264' and yes_no('Copy stream?'):
-            stream.crf = 0
-        elif yes_no('Use default crf?'):
-            stream.crf = 18
-        else:
-            crf = click.prompt('Enter crf', type=click.IntRange(0, 51))
-            stream.crf = crf
-    elif stream.type == 'audio':
-        if stream.codec == 'aac' and yes_no('Copy stream?'):
-            stream.custom_bitrate = None
-        elif stream.bitrate and yes_no('Use source bitrate '
-                                       '({}Kib/s)?'.format(stream.bitrate)):
-            stream.custom_bitrate = stream.bitrate
-        elif yes_no('Use default bitrate (384Kib/s)?'):
-            stream.custom_bitrate = 384
-        else:
-            stream.custom_bitrate = click.prompt('Enter bitrate',
-                                                 type=click.IntRange(0, 5000))
+
+    try:
+        stream = container.streams[
+            int(multiple_choice('Select a stream:', indices))
+        ]
+        if stream.type == 'video':
+            if stream.codec == 'h264' and yes_no('Copy stream?'):
+                stream.crf = 0
+            elif yes_no('Use default crf?'):
+                stream.crf = 18
+            else:
+                crf = click.prompt('Enter crf', type=click.IntRange(0, 51))
+                stream.crf = crf
+        elif stream.type == 'audio':
+            if stream.codec == 'aac' and yes_no('Copy stream?'):
+                stream.custom_bitrate = None
+            elif stream.bitrate and yes_no(
+                    'Use source bitrate ({}Kib/s)?'.format(stream.bitrate)
+            ):
+                stream.custom_bitrate = stream.bitrate
+            elif yes_no('Use default bitrate (384Kib/s)?'):
+                stream.custom_bitrate = 384
+            else:
+                stream.custom_bitrate = click.prompt(
+                    'Enter bitrate', type=click.IntRange(0, 5000)
+                )
+    except click.exceptions.Abort:
+        raise UserCancelError('Cancelled editing stream.')
 
 
-def change_file_name(processor):
+def change_file_name(container):
     """Prompt the user to specify a name for the output file.
 
     Args:
-        porcessor (Processor): The Processor that will make the file.
+        container (Container): The Container whose filename to change.
 
     Raises:
         UserCancelError: If the user cancels entering a name.
 
     """
 
-    default = pathlib.PurePath(processor.container.file_name).stem + '.mp4'
-    if yes_no('Use default file name ({})?'.format(default)):
-        processor.output_name = default
-    else:
-        try:
+    default = PurePath(container.file_name).stem + '.mp4'
+    try:
+        if yes_no('Use default file name ({})?'.format(default)):
+            container.output_name = default
+        else:
             name = click.prompt('Enter output file name (without extension)')
-            processor.output_name = name + '.mp4'
-        except click.exceptions.Abort:
-            raise UserCancelError('Cancelled editing file name.')
+            container.output_name = name + '.mp4'
+    except click.exceptions.Abort:
+        raise UserCancelError('Cancelled editing file name.')
 
 
 def build_containers(file_list):
@@ -731,7 +736,7 @@ def build_containers(file_list):
     Note:
         If a container fails to build as the result of a ffprobe error, that
             error is echoed, and the building continues. If no containers are
-            built, return and empty list.
+            built, return an empty list.
 
     Args:
         file_list (list): File names (str) to attempt to build into containers.
@@ -812,14 +817,14 @@ def convert(ctx):
     """Convert video file(s)"""
 
     containers = build_containers(ctx.obj['FILES'])
-    processors = []
+    running = []
     for container in containers:
-        processor = Processor(container)
         while True:
-            processor.display()
+            container.display()
+            container.display_conversion()
             char = multiple_choice(
                 'Convert file?', ['y', 'n', 'a', 'r', 's', 'e', 'c', 'd'],
-                ('yes/no/{add/remove} subtitle file/{select/edit} streams/'
+                ('yes/no/{add,remove} subtitle file/{select,edit} streams/'
                  'change filename/display command')
             )
             try:
@@ -831,39 +836,39 @@ def convert(ctx):
                 elif char == 'r':
                     remove_subtitles(container)
                 elif char == 's':
-                    select_streams(processor)
+                    select_streams(container)
                 elif char == 'e':
                     edit_stream_options(container)
                 elif char == 'c':
-                    change_file_name(processor)
+                    change_file_name(container)
                 elif char == 'd':
                     click.secho('Command:', fg='cyan', bold=True)
-                    click.echo(' '.join(processor.build_command()))
+                    click.echo(' '.join(container.build_command()))
             except UserCancelError as _e:
                 click.secho('{}Warning: {}'.format(os.linesep, _e.message),
                             fg='red')
             if char == 'y':
-                processor.execute()
-                processors.append(processor)
+                container.convert()
+                running.append(container)
             if char in ['y', 'n']:
                 break
 
-    total_ms = sum([p.container.microseconds for p in processors])
-    label = 'Processing {} files:'.format(len(processors))
+    total_ms = sum([container.microseconds for container in running])
+    label = 'Processing {} files:'.format(len(running))
     with click.progressbar(length=total_ms, label=label) as pr_bar:
-        while processors:
-            for proc in processors:
-                if proc.process.poll() is not None:
-                    if proc.process.returncode:
+        while running:
+            for container in running:
+                if container.process.poll() is not None:
+                    if container.process.returncode:
                         click.secho('Warning: ffmpeg error while converting'
-                                    '{}'.format(proc.container.file_name),
+                                    '{}'.format(container.file_name),
                                     fg='red')
-                        click.echo(proc.process.communicate()[1]
+                        click.echo(container.process.communicate()[1]
                                    .strip(os.linesep))
-                    pr_bar.update(proc.container.microseconds - proc.progress)
-                    processors.remove(proc)
+                    pr_bar.update(container.microseconds - container.progress)
+                    running.remove(container)
                 else:
-                    with open(proc.temp_file.name, 'r') as status:
+                    with open(container.temp_file.name, 'r') as status:
                         line_list = status.readlines()
                     microsec = 0
                     for line in reversed(line_list):
@@ -872,8 +877,8 @@ def convert(ctx):
                                 microsec = int(line.split('=')[1])
                                 break
                     if microsec:
-                        pr_bar.update(microsec - proc.progress)
-                        proc.progress = microsec
+                        pr_bar.update(microsec - container.progress)
+                        container.progress = microsec
             time.sleep(1)
 
 
