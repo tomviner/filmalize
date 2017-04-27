@@ -56,7 +56,7 @@ class SelectedStreams(click.ParamType):
     def __init__(self, container):
         """Initialize type: get streams from container."""
 
-        self.streams = container.streams
+        self.streams = container.streams_dict
 
     def convert(self, value, param, ctx):
         """Validate that input stream indices are acceptable. Return indices
@@ -95,19 +95,21 @@ class Container(object):
             file_name (str): The multimedia container file to represent.
             duration (float): The duration of the streams in the container in
                 seconds.
-            streams (dict): A dictionary containing Stream objects as values
-                keyed by their index values.
-            subtitle_files (list): Optional list of SubtitleFile objects.
-            title (str): Optional container title label.
-            size (float): Optional container size label in MiBs.
-            bitrate (float): Optional container bitrate label in Mib/s.
-            container_format (str): Optional container format label. Regardless
-                of the presence of this label, the container must be a format
-                that ffmpeg can process.
-            selected (list): Optional list of integer stream indexes. If not
-                specified, the first audio and video stream will be selected.
-            output_name (str): Optional output file name. If not specified, the
-                output file name will be set to the input file, but with '.mp4'
+            streams (list): The Stream objects representing the mutimedia
+                streams in this container.
+            subtitle_files (list, optional): SubtitleFile objects representing
+                subtitle files to add to the output file.
+            title (str, optional): Container title label.
+            size (float, optional): Container size label in MiBs.
+            bitrate (float, optional): Container bitrate label in Mib/s.
+            container_format (str, optional): Container format label.
+                Regardless of the presence of this label, the container must be
+                a format that ffmpeg can process.
+            selected (list, optional): Integer stream indexes of the streams to
+                include in the output file. If not specified, the first audio
+                and video stream will be selected.
+            output_name (str, optional): Output filename. If not specified, the
+                output filename will be set to the input file, but with '.mp4'
                 replacing the extension.
 
         """
@@ -129,18 +131,24 @@ class Container(object):
         self.progress = 0
         self.process = None
 
+    @property
+    def streams_dict(self):
+        """dict: The streams keyed by their indexes."""
+
+        return {s.index: s for s in self.streams}
+
     def default_streams(self):
         """Return a list of the indexes of the first video and audio stream."""
 
         streams = []
         audio, video = None, None
-        for index, stream in self.streams.items():
+        for stream in self.streams:
             if not audio and stream.type == 'audio':
                 audio = True
-                streams.append(index)
+                streams.append(stream.index)
             elif not video and stream.type == 'video':
                 video = True
-                streams.append(index)
+                streams.append(stream.index)
 
         return streams
 
@@ -181,7 +189,7 @@ class Container(object):
                 self.container_format))
         click.echo(' | '.join(file_description))
 
-        for _, stream in self.streams.items():
+        for stream in self.streams:
             stream.display()
 
         for subtitle in self.subtitle_files:
@@ -191,13 +199,13 @@ class Container(object):
         """Echo a pretty representation of the conversion actions to take."""
 
         click.secho('Filmalize Actions:', fg='cyan', bold=True)
-        for stream_num in self.selected:
-            header = 'Stream {}: '.format(stream_num)
-            stream = self.streams[stream_num]
-            stream.build_options()
-            info = stream.option_summary
-            click.echo(click.style(header, fg='green', bold=True)
-                       + click.style(info, fg='yellow'))
+        for stream in self.streams:
+            if stream.index in self.selected:
+                header = 'Stream {}: '.format(stream.index)
+                stream.build_options()
+                info = stream.option_summary
+                click.echo(click.style(header, fg='green', bold=True)
+                           + click.style(info, fg='yellow'))
         for subtitle in self.subtitle_files:
             click.echo(
                 click.style(subtitle.file_name + ': ', fg='green', bold=True)
@@ -235,7 +243,7 @@ class Container(object):
         for index, _ in enumerate(self.subtitle_files):
             command.extend(['-map', '{}:0'.format(index + 1)])
         stream_number = {'video': 0, 'audio': 0, 'subtitle': 0}
-        output_streams = [self.streams[s] for s in self.selected]
+        output_streams = [s for s in self.streams if s.index in self.selected]
         for stream in output_streams:
             command.extend(stream.build_options(stream_number[stream.type]))
             stream_number[stream.type] += 1
@@ -264,19 +272,19 @@ class Stream(object):
                 'subtitle'.
             codec (str): The codec with which the stream is encoded. Must be a
                 codec that ffmpeg will recognize.
-            language (str): Optional language name or abbr.
-            default (bool): Optional indication of this stream being the
-                default of it's type.
-            title (str): Optional stream title label.
-            resolution (str): Optional stream resolution label.
-            bitrate (float): Optional (video) stream bitrate in Mib/s.
-            bitrate (int): Optional (audio) stream bitrate in Kib/s.
-            scan (str): Optional (video) stream scanning information
+            language (str, optional): Language name or abbreviation label.
+            default (bool, optional): True if this stream is the default stream
+                of it's type. This is just a label.
+            title (str, optional): Stream title label.
+            resolution (str, optional): Stream resolution label.
+            bitrate (float, optional): Video stream bitrate in Mib/s.
+            bitrate (int, optional): Audio stream bitrate in Kib/s.
+            scan (str, optional): Video stream scanning information
                 (progressive scan or interlaced).
-            channels (str): Optional (audio) channel information (stereo, 5.1,
+            channels (str, optional): Audio channel information (stereo, 5.1,
                 etc.).
-            crf (int): Optional (video) stream Constant Rate Factor.
-            custom_bitrate (int): Optional (audio) stream output bitrate to
+            crf (int, optional): Video stream Constant Rate Factor.
+            custom_bitrate (int, optional): Audio stream output bitrate to
                 transcode to.
 
         """
@@ -536,8 +544,7 @@ def build_container(file_name):
         probe_info = json.loads(probe_response.stdout)
 
         duration = float(probe_info['format']['duration'])
-        streams = {int(stream['index']): build_stream(stream)
-                   for stream in probe_info['streams']}
+        streams = [build_stream(stream) for stream in probe_info['streams']]
 
         if ('tags' in probe_info['format']
                 and 'title' in probe_info['format']['tags']):
@@ -675,12 +682,12 @@ def edit_stream_options(container):
     """
 
     container.display()
-    indices = [str(i) for i, s in container.streams.items()
-               if s.type in ['audio', 'video']]
+    indexes = [str(stream.index) for stream in container.streams
+               if stream.type in ['audio', 'video']]
 
     try:
-        stream = container.streams[
-            int(multiple_choice('Select a stream:', indices))
+        stream = container.streams_dict[
+            int(multiple_choice('Select a stream:', indexes))
         ]
         if stream.type == 'video':
             if stream.codec == 'h264' and yes_no('Copy stream?'):
