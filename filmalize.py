@@ -30,6 +30,7 @@ import chardet
 DEFAULT_BITRATE = 384
 DEFAULT_CRF = 18
 
+
 class Error(Exception):
     """Base class for filmalize Exceptions."""
 
@@ -85,12 +86,39 @@ class SelectedStreams(click.ParamType):
             return selected
 
 
+class ContainerLabel(object):
+    """Labels for Container objects"""
+
+    def __init__(self, title=None, size=None, bitrate=None,
+                 container_format=None):
+        """Populate Container Label object instance variables.
+
+        Note:
+            The information stored here is simply for display and will not
+            affect the output file.
+
+            All arguments are optional.
+
+        Args:
+            title (str, optional): Container title label.
+            size (float, optional): Container size label in MiBs.
+            bitrate (float, optional): Container bitrate label in Mib/s.
+            container_format (str, optional): Container format label.
+                Regardless of the presence of this label, the container must be
+                a format that ffmpeg can process.
+
+        """
+        self.title = title if title else ''
+        self.size = size if size else ''
+        self.bitrate = bitrate if bitrate else ''
+        self.container_format = container_format if container_format else ''
+
+
 class Container(object):
     """Multimedia container file object."""
 
     def __init__(self, file_name, duration, streams, subtitle_files=None,
-                 title=None, size=None, bitrate=None, container_format=None,
-                 selected=None, output_name=None):
+                 selected=None, output_name=None, labels=None):
         """Populate container object properties and instance variables.
 
         Args:
@@ -101,18 +129,14 @@ class Container(object):
                 streams in this container.
             subtitle_files (list, optional): SubtitleFile objects representing
                 subtitle files to add to the output file.
-            title (str, optional): Container title label.
-            size (float, optional): Container size label in MiBs.
-            bitrate (float, optional): Container bitrate label in Mib/s.
-            container_format (str, optional): Container format label.
-                Regardless of the presence of this label, the container must be
-                a format that ffmpeg can process.
             selected (list, optional): Integer stream indexes of the streams to
                 include in the output file. If not specified, the first audio
                 and video stream will be selected.
             output_name (str, optional): Output filename. If not specified, the
                 output filename will be set to the input file, but with '.mp4'
                 replacing the extension.
+            labels (ContainerLabel, optional): Informational metadata about the
+                input file.
 
         """
 
@@ -120,12 +144,9 @@ class Container(object):
         self.duration = duration
         self.streams = streams
         self.subtitle_files = subtitle_files if subtitle_files else []
-        self.title = title
-        self.size = size
-        self.bitrate = bitrate
-        self.container_format = container_format
         self.output_name = output_name if output_name else self.default_name()
         self.selected = selected if selected else self.default_streams()
+        self.labels = labels if labels else ContainerLabel()
 
         self.microseconds = int(duration * 1000000)
         self.length = datetime.timedelta(seconds=round(duration, 0))
@@ -196,18 +217,15 @@ class Container(object):
     def display(self):
         """Echo a pretty representation of the Container."""
 
-        click.secho('File: {}'.format(self.file_name), fg='magenta')
-        if self.title:
-            click.secho('Title: {}'.format(self.title), fg='cyan')
+        click.secho('*** File: {} ***'.format(self.file_name), fg='magenta')
+        if self.labels.title:
+            click.secho('Title: {}'.format(self.labels.title), fg='cyan')
 
         file_description = ['Length: {}'.format(self.length)]
-        if self.size:
-            file_description.append('Size: {}MiB'.format(self.size))
-        if self.bitrate:
-            file_description.append('Bitrate: {}Mib/s'.format(self.bitrate))
-        if self.container_format:
-            file_description.append('Container: {}'.format(
-                self.container_format))
+        file_description.append('Size: {}MiB'.format(self.labels.size))
+        file_description.append('Bitrate: {}Mib/s'.format(self.labels.bitrate))
+        file_description.append('Container: {}'
+                                .format(self.labels.container_format))
         click.echo(' | '.join(file_description))
 
         for stream in self.streams:
@@ -278,12 +296,65 @@ class Container(object):
         return command
 
 
+class StreamLabel(object):
+    """Labels for Stream objects"""
+
+    def __init__(self, title=None, bitrate=None, resolution=None,
+                 language=None, channels=None, default=None):
+        """Populate StreamLabel object instance variables.
+
+        Note:
+            The information stored here is simply for display and (with one
+            exception) will not affect the output file.
+
+            For audio streams, if this stream cannot be copied and must be
+            transcoded, and if there is a value stored in self.bitrate, that
+            value will be chosen by default as the output stream target
+            bitrate.
+
+            All Arguments are optional.
+
+        Args:
+            title (str): Stream title.
+            bitrate (float): Stream bitrate in Mib/s for video streams or Kib/s
+                for audio streams.
+            resolution (str): Stream resolution.
+            language (str): Language name or abbreviation.
+            channels (str): Audio channel information (stereo, 5.1, etc.).
+            default (bool): True if this stream is the default stream of its
+                type, else False.
+
+        """
+
+        self.title = title if title else ''
+        self.bitrate = bitrate if bitrate else ''
+        self.resolution = resolution if resolution else ''
+        self.language = language if language else ''
+        self.channels = channels if channels else ''
+        self._default = 'default' if default else ''
+
+    @property
+    def default(self):
+        """str: 'default' if this stream is the default stream of its type,
+            else ''.
+
+        Args:
+            is_default (bool): True if this stream is the default stream of its
+                type, else False.
+
+        """
+        return self._default
+
+    @default.setter
+    def default(self, is_default):
+        self._default = 'default' if is_default else ''
+
+
 class Stream(object):
     """Multimedia stream object."""
 
-    def __init__(self, index, stream_type, codec, language=None, default=None,
-                 title=None, resolution=None, bitrate=None, scan=None,
-                 channels=None, crf=None, force_bitrate=None):
+    def __init__(self, index, stream_type, codec, custom_crf=None,
+                 custom_bitrate=None, labels=None):
         """Populate Stream object instance variables.
 
         Args:
@@ -291,46 +362,26 @@ class Stream(object):
             stream_type (str): The multimedia type of the stream. Streams will
                 be included only if they are of type 'audio', 'video', or
                 'subtitle'.
-            codec (str, optional): Label of he codec with which the stream is
-                encoded. Must be a codec that ffmpeg will recognize.
-            language (str, optional): Language name or abbreviation label.
-            default (bool, optional): True if this stream is the default stream
-                of it's type. This is just a label.
-            title (str, optional): Stream title label.
-            resolution (str, optional): Stream resolution label.
-            bitrate (float, optional): Stream bitrate label in Mib/s for video
-                streams or Kib/s for audio streams. For audio streams, this
-                bitrate will be chosen for the output file if the audio stream
-                cannot be copied. To force audio transcoding pass the desired
-                bitrate to force_bitrate.
-            scan (str, optional): Video stream scanning information
-                (progressive scan or interlaced).
-            channels (str, optional): Audio channel information (stereo, 5.1,
-                etc.).
-            crf (int, optional): Video stream Constant Rate Factor. If
-                specified, this crf will be used even if the input stream is
-                suitable for copying to the output file.
-            force_bitrate (float): Audio stream ouput bitrate in Kib/s. If
+            codec (str): The codec with which the stream is encoded.
+            custom_crf (int, optional): Video stream Constant Rate Factor. If
+                specified, this stream will be transcoded using this crf even
+                if the input stream is suitable for copying to the output file.
+            custom_bitrate (float): Audio stream ouput bitrate in Kib/s. If
                 specified, this audio stream will be transcoded using this as
                 the target bitrate even if the input stream is suitable for
-                copying.
+                copying and even if labels.bitrate is set (see StreamLabel).
+            labels (StreamLabel, optional): Informational metadata about the
+                input stream.
 
         """
 
         self.index = index
         self.type = stream_type
         self.codec = codec
-        self.language = language
-        self.default = default
-        self.title = title
-        self.resolution = resolution
-        self.bitrate = bitrate if bitrate else None
-        self.scan = scan
-        self.channels = channels
-        self.crf = crf if crf else None
+        self.custom_crf = custom_crf
+        self.custom_bitrate = custom_bitrate
+        self.labels = labels if labels else StreamLabel()
 
-        self.custom_bitrate = force_bitrate if force_bitrate else None
-        self.custom_crf = None
         self.option_summary = None
 
     def build_options(self, number=0):
@@ -354,7 +405,6 @@ class Stream(object):
             options.extend(['-c:v:{}'.format(number)])
             if self.custom_crf or self.codec != 'h264':
                 crf = (self.custom_crf if self.custom_crf
-                       else self.crf if self.crf
                        else DEFAULT_CRF)
                 options.extend(['libx264', '-preset', 'slow', '-crf', str(crf),
                                 '-pix_fmt', 'yuv420p'])
@@ -366,7 +416,7 @@ class Stream(object):
             options.extend(['-c:a:{}'.format(number)])
             if self.custom_bitrate or self.codec != 'aac':
                 bitrate = (self.custom_bitrate if self.custom_bitrate
-                           else self.bitrate if self.bitrate
+                           else self.labels.bitrate if self.labels.bitrate
                            else DEFAULT_BITRATE)
                 options.extend(['aac', '-b:a:{}'.format(number),
                                 '{}k'.format(bitrate)])
@@ -385,34 +435,23 @@ class Stream(object):
         """Echo a pretty representation of the stream."""
 
         stream_header = 'Stream {}:'.format(self.index)
-        stream_info = []
-        if self.type:
-            stream_info.append(self.type)
-        if self.codec:
-            stream_info.append(self.codec)
-        if self.language:
-            stream_info.append(self.language)
-        if self.default:
-            stream_info.append('default')
+        stream_info = [self.type, self.codec]
+        stream_info.append(self.labels.language)
+        stream_info.append(self.labels.default)
         click.echo('  ' + click.style(stream_header, fg='green', bold=True)
                    + ' ' + click.style(' '.join(stream_info), fg='yellow'))
 
-        if self.title:
-            click.echo('    Title: {}'.format(self.title))
+        if self.labels.title:
+            click.echo('    Title: {}'.format(self.labels.title))
 
         stream_specs = []
         if self.type == 'video':
-            if self.resolution:
-                stream_specs.append('Resolution: {}'.format(self.resolution))
-            if self.bitrate:
-                stream_specs.append('Bitrate: {}Mib/s'.format(self.bitrate))
-            if self.scan:
-                stream_specs.append('Scan: {}'.format(self.scan))
+            stream_specs.append('Resolution: {}'
+                                .format(self.labels.resolution))
+            stream_specs.append('Bitrate: {}Mib/s'.format(self.labels.bitrate))
         elif self.type == 'audio':
-            if self.channels:
-                stream_specs.append('Channels: {}'.format(self.channels))
-            if self.bitrate:
-                stream_specs.append('Bitrate: {}Kib/s'.format(self.bitrate))
+            stream_specs.append('Channels: {}'.format(self.labels.channels))
+            stream_specs.append('Bitrate: {}Kib/s'.format(self.labels.bitrate))
         if stream_specs:
             click.echo('    ' + ' | '.join(stream_specs))
 
@@ -549,46 +588,42 @@ def build_stream(stream_info):
 
     """
 
-    [language, default, title, resolution, bitrate, scan,
-     channels] = [None for _ in range(7)]
-
     index = stream_info['index']
     stream_type = stream_info['codec_type']
     codec = stream_info['codec_name']
 
+    labels = StreamLabel()
     if 'tags' in stream_info and 'language' in stream_info['tags']:
-        language = stream_info['tags']['language']
+        labels.language = stream_info['tags']['language']
     if ('disposition' in stream_info
             and 'default' in stream_info['disposition']):
-        default = bool(stream_info['disposition']['default'])
+        labels.default = bool(stream_info['disposition']['default'])
     if 'tags' in stream_info and 'title' in stream_info['tags']:
-        title = stream_info['tags']['title']
+        labels.title = stream_info['tags']['title']
 
     if stream_type == 'video':
         if 'height' in stream_info and 'width' in stream_info:
             width = str(stream_info['width'])
             height = str(stream_info['height'])
-            resolution = width + 'x' + height
+            labels.resolution = width + 'x' + height
         elif ('coded_height' in stream_info
               and 'coded_width' in stream_info):
             width = str(stream_info['coded_width'])
             height = str(stream_info['coded_height'])
-            resolution = width + 'x' + height
+            labels.resolution = width + 'x' + height
         if 'bit_rate' in stream_info:
             bits = int(stream_info['bit_rate'])
-            bitrate = round(bitmath.Mib(bits=bits).value, 2)
+            labels.bitrate = round(bitmath.Mib(bits=bits).value, 2)
         if 'field_order' in stream_info:
-            scan = stream_info['field_order']
+            labels.bitrate = stream_info['field_order']
     elif stream_type == 'audio':
         if 'channel_layout' in stream_info:
-            channels = stream_info['channel_layout']
+            labels.channels = stream_info['channel_layout']
         if 'bit_rate' in stream_info:
             bits = int(stream_info['bit_rate'])
-            bitrate = round(bitmath.Kib(bits=bits).value)
+            labels.bitrate = round(bitmath.Kib(bits=bits).value)
 
-    return Stream(index, stream_type, codec, language=language,
-                  default=default, title=title, resolution=resolution,
-                  bitrate=bitrate, scan=scan, channels=channels)
+    return Stream(index, stream_type, codec, labels=labels)
 
 
 def build_container(file_name):
@@ -618,26 +653,24 @@ def build_container(file_name):
         raise ProbeError(file_name, probe_response.stderr.decode('utf-8')
                          .strip(os.linesep))
     else:
-        title, size, bitrate, container_format = [None for _ in range(4)]
         probe_info = json.loads(probe_response.stdout)
-
+        labels = ContainerLabel()
         duration = float(probe_info['format']['duration'])
         streams = [build_stream(stream) for stream in probe_info['streams']]
 
         if ('tags' in probe_info['format']
                 and 'title' in probe_info['format']['tags']):
-            title = probe_info['format']['tags']['title']
+            labels.title = probe_info['format']['tags']['title']
         if 'size' in probe_info['format']:
             file_bytes = int(probe_info['format']['size'])
-            size = round(bitmath.MiB(bytes=file_bytes).value, 2)
+            labels.size = round(bitmath.MiB(bytes=file_bytes).value, 2)
         if 'bit_rate' in probe_info['format']:
             bits = int(probe_info['format']['bit_rate'])
-            bitrate = round(bitmath.Mib(bits=bits).value, 2)
+            labels.bitrate = round(bitmath.Mib(bits=bits).value, 2)
         if 'format_name' in probe_info['format']:
-            container_format = probe_info['format']['format_name']
+            labels.container_format = probe_info['format']['format_name']
 
-    return Container(file_name, duration, streams, title=title, size=size,
-                     bitrate=bitrate, container_format=container_format)
+    return Container(file_name, duration, streams, labels=labels)
 
 
 def add_subtitles(container):
