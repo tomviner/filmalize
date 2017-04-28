@@ -22,6 +22,7 @@ import datetime
 import tempfile
 import time
 from pathlib import PurePath
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import click
 import bitmath
@@ -867,15 +868,18 @@ def build_containers(file_list):
     """
 
     containers = []
-    for file in file_list:
-        try:
-            container = build_container(file)
-            containers.append(container)
-        except ProbeError as _e:
-            click.secho('Warning: Unable to process {}'.format(_e.file_name),
-                        fg='red')
-            click.echo(_e.message)
-    return containers
+    with ThreadPoolExecutor() as executor:
+        futures = []
+        for file_name in file_list:
+            futures.append(executor.submit(build_container, file_name))
+        for future in as_completed(futures):
+            try:
+                containers.append(future.result())
+            except ProbeError as _e:
+                click.secho('Warning: unable to process {}'
+                            .format(_e.file_name), fg='red')
+                click.echo(_e.message)
+    return sorted(containers, key=lambda container: container.file_name)
 
 
 @click.group()
