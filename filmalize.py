@@ -27,6 +27,8 @@ import click
 import bitmath
 import chardet
 
+DEFAULT_BITRATE = 384
+DEFAULT_CRF = 18
 
 class Error(Exception):
     """Base class for filmalize Exceptions."""
@@ -194,13 +196,11 @@ class Container(object):
     def display(self):
         """Echo a pretty representation of the Container."""
 
+        click.secho('File: {}'.format(self.file_name), fg='magenta')
         if self.title:
             click.secho('Title: {}'.format(self.title), fg='cyan')
-        click.secho('File: {}'.format(self.file_name), fg='magenta')
 
-        file_description = []
-        if self.length:
-            file_description.append('Length: {}'.format(self.length))
+        file_description = ['Length: {}'.format(self.length)]
         if self.size:
             file_description.append('Size: {}MiB'.format(self.size))
         if self.bitrate:
@@ -283,7 +283,7 @@ class Stream(object):
 
     def __init__(self, index, stream_type, codec, language=None, default=None,
                  title=None, resolution=None, bitrate=None, scan=None,
-                 channels=None, crf=None, custom_bitrate=None):
+                 channels=None, crf=None, force_bitrate=None):
         """Populate Stream object instance variables.
 
         Args:
@@ -291,22 +291,29 @@ class Stream(object):
             stream_type (str): The multimedia type of the stream. Streams will
                 be included only if they are of type 'audio', 'video', or
                 'subtitle'.
-            codec (str): The codec with which the stream is encoded. Must be a
-                codec that ffmpeg will recognize.
+            codec (str, optional): Label of he codec with which the stream is
+                encoded. Must be a codec that ffmpeg will recognize.
             language (str, optional): Language name or abbreviation label.
             default (bool, optional): True if this stream is the default stream
                 of it's type. This is just a label.
             title (str, optional): Stream title label.
             resolution (str, optional): Stream resolution label.
-            bitrate (float, optional): Video stream bitrate in Mib/s.
-            bitrate (int, optional): Audio stream bitrate in Kib/s.
+            bitrate (float, optional): Stream bitrate label in Mib/s for video
+                streams or Kib/s for audio streams. For audio streams, this
+                bitrate will be chosen for the output file if the audio stream
+                cannot be copied. To force audio transcoding pass the desired
+                bitrate to force_bitrate.
             scan (str, optional): Video stream scanning information
                 (progressive scan or interlaced).
             channels (str, optional): Audio channel information (stereo, 5.1,
                 etc.).
-            crf (int, optional): Video stream Constant Rate Factor.
-            custom_bitrate (int, optional): Audio stream output bitrate to
-                transcode to.
+            crf (int, optional): Video stream Constant Rate Factor. If
+                specified, this crf will be used even if the input stream is
+                suitable for copying to the output file.
+            force_bitrate (float): Audio stream ouput bitrate in Kib/s. If
+                specified, this audio stream will be transcoded using this as
+                the target bitrate even if the input stream is suitable for
+                copying.
 
         """
 
@@ -317,11 +324,13 @@ class Stream(object):
         self.default = default
         self.title = title
         self.resolution = resolution
-        self.bitrate = bitrate
+        self.bitrate = bitrate if bitrate else None
         self.scan = scan
         self.channels = channels
-        self.crf = crf
-        self.custom_bitrate = custom_bitrate
+        self.crf = crf if crf else None
+
+        self.custom_bitrate = force_bitrate if force_bitrate else None
+        self.custom_crf = None
         self.option_summary = None
 
     def build_options(self, number=0):
@@ -332,8 +341,8 @@ class Stream(object):
         updated to reflect the selected options.
 
         Args:
-            number (int): The number of Streams of this type that have been
-            added to the command.
+            number (int, optional): The number of Streams of this type that
+            have been added to the command.
 
         Returns:
             list: The ffmpeg options for this Stream.
@@ -343,21 +352,22 @@ class Stream(object):
         options = []
         if self.type == 'video':
             options.extend(['-c:v:{}'.format(number)])
-            if self.crf or self.codec != 'h264':
-                crf = self.crf if self.crf else 18
+            if self.custom_crf or self.codec != 'h264':
+                crf = (self.custom_crf if self.custom_crf
+                       else self.crf if self.crf
+                       else DEFAULT_CRF)
                 options.extend(['libx264', '-preset', 'slow', '-crf', str(crf),
                                 '-pix_fmt', 'yuv420p'])
-                self.option_summary = 'transcode -> h264, crf={}'.format(crf)
+                self.option_summary = ('transcode -> h264, crf={}'.format(crf))
             else:
                 options.extend(['copy'])
                 self.option_summary = 'copy'
         elif self.type == 'audio':
             options.extend(['-c:a:{}'.format(number)])
             if self.custom_bitrate or self.codec != 'aac':
-                if self.custom_bitrate:
-                    bitrate = self.custom_bitrate
-                else:
-                    bitrate = self.bitrate if self.bitrate else 384
+                bitrate = (self.custom_bitrate if self.custom_bitrate
+                           else self.bitrate if self.bitrate
+                           else DEFAULT_BITRATE)
                 options.extend(['aac', '-b:a:{}'.format(number),
                                 '{}k'.format(bitrate)])
                 self.option_summary = ('transcode -> aac, '
@@ -470,8 +480,19 @@ def exclusive(ctx_params, exclusive_params, error_message):
 
 
 def yes_no(prompt):
-    """Utility function to ask the user a yes/no question."""
+    """Utility function to ask the user a yes/no question.
 
+    Note:
+        The user must enter 'y' or 'n', and will be prompted repeatedly until
+        they do so.
+
+    Args:
+        prompt (str): The question to ask the user.
+
+    Returns:
+        bool: True if the user enters 'y' or false if the user enters 'n'.
+
+    """
     while True:
         click.echo(prompt + ' [y/n]', nl=False)
         char = click.getchar()
@@ -485,7 +506,24 @@ def yes_no(prompt):
 
 
 def multiple_choice(prompt, responses, key=None):
-    """Utility function to ask the user a multple choice question."""
+    """Utility function to ask the user a multple choice question.
+
+    Note:
+        The user must enter one of the characters in the responses list, and
+        will be prompted repeatedly until they do so.
+
+    Args:
+        prompt (str): The question to ask the user.
+        responses (list of str): The possible answers to the question in the
+            form of individual characters. The characters will be displayed to
+            the user separated by '/' characters.
+        key (str, optional): A key to relate the characters in the responses
+            list to answers to the prompt.
+
+    Returns:
+        str: The character from the responses list that the user selected.
+
+    """
 
     while True:
         if key:
@@ -732,21 +770,22 @@ def edit_stream_options(container):
         ]
         if stream.type == 'video':
             if stream.codec == 'h264' and yes_no('Copy stream?'):
-                stream.crf = 0
+                stream.custom_crf = None
             elif yes_no('Use default crf?'):
-                stream.crf = 18
+                stream.custom_crf = DEFAULT_CRF
             else:
                 crf = click.prompt('Enter crf', type=click.IntRange(0, 51))
-                stream.crf = crf
+                stream.custom_crf = crf
         elif stream.type == 'audio':
             if stream.codec == 'aac' and yes_no('Copy stream?'):
                 stream.custom_bitrate = None
             elif stream.bitrate and yes_no(
-                    'Use source bitrate ({}Kib/s)?'.format(stream.bitrate)
+                    'Use source bitrate ({}Kib/s)?'
+                    .format(stream.bitrate)
             ):
                 stream.custom_bitrate = stream.bitrate
             elif yes_no('Use default bitrate (384Kib/s)?'):
-                stream.custom_bitrate = 384
+                stream.custom_bitrate = DEFAULT_BITRATE
             else:
                 stream.custom_bitrate = click.prompt(
                     'Enter bitrate', type=click.IntRange(0, 5000)
