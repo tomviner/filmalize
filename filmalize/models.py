@@ -86,7 +86,7 @@ class Container(object):
 
     @classmethod
     def from_file(cls, file_name):
-        """Build a Container instance from a given file.
+        """Build a Container instance from a given multimedia file.
 
         Attempt to probe the file with ffprobe. If the probe is succesful,
         finish instatiation using the results of the probe, building Stream
@@ -183,18 +183,17 @@ class Container(object):
 
         return PurePath(self.file_name).stem + '.mp4'
 
-    def add_subtitle_file(self, file_name, encoding):
+    def add_subtitle_file(self, file_name, encoding=None):
         """Add an external subtitle file. Allow the user to set a custom
         encoding.
 
         Args:
             file_name (str): The name of the subtitle file.
-            encoding (str): The encoding of the subtitle file.
+            encoding (str, optional): The encoding of the subtitle file.
 
         """
 
-        index = len(self.subtitle_files + 1)
-        self.subtitle_files[index] = SubtitleFile(file_name, encoding)
+        self.subtitle_files.append(SubtitleFile(file_name, encoding))
 
     def convert(self):
         """Start the conversion of this container in a subprocess."""

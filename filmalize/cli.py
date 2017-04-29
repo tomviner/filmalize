@@ -1,15 +1,15 @@
 """Command-Line Interface for filmalize."""
 
 import os
+import sys
 import time
-from pathlib import PurePath
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import PurePath
 
 import click
-import chardet
 
 from filmalize.errors import ProbeError, UserCancelError
-from filmalize.models import Container, SubtitleFile
+from filmalize.models import Container
 
 DEFAULT_BITRATE = 384
 DEFAULT_CRF = 18
@@ -117,10 +117,12 @@ def multiple_choice(prompt, responses, key=None):
     """
 
     while True:
+        click.echo()
+        options = ' ' + '/'.join(responses)
+        click.echo(click.style('*** ' + prompt, fg='blue', bg='white',
+                               bold=True) + options)
         if key:
-            click.echo('Key: {}'.format(key))
-        full_prompt = prompt + ' [{}]'.format('/'.join(responses))
-        click.echo(full_prompt, nl=False)
+            click.echo(click.style('Key: ', fg='red') + key)
         char = click.getchar()
         click.echo()
         if char in responses:
@@ -130,7 +132,7 @@ def multiple_choice(prompt, responses, key=None):
 
 
 def display_container(container):
-    """Echo a pretty representation of a Container."""
+    """Echo a pretty representation of a given Container."""
 
     click.secho('*** File: {} ***'.format(container.file_name), fg='magenta')
     if container.labels.title:
@@ -159,6 +161,8 @@ def display_conversion(container):
 
     """
 
+    click.clear()
+    display_container(container)
     click.secho('Filmalize Actions:', fg='cyan', bold=True)
     for stream in container.streams:
         if stream.index in container.selected:
@@ -176,12 +180,7 @@ def display_conversion(container):
 
 
 def display_stream(stream):
-    """Echo a pretty representation of the stream.
-
-    Args:
-        stream (Stream): The Stream to display.
-
-    """
+    """Echo a pretty representation of a given Stream."""
 
     stream_header = 'Stream {}:'.format(stream.index)
     stream_info = [stream.type, stream.codec]
@@ -206,47 +205,37 @@ def display_stream(stream):
 
 
 def display_sub_file(sub_file):
-    """Echo a pretty representation of the subtitle file.
-
-    Args:
-        sub_file (SubtitleFile): The SubtitleFile to display.
-
-    """
+    """Echo a pretty representation of a given SubtitleFile."""
 
     click.secho('Subtitle File: {}'.format(sub_file.file_name), fg='magenta')
     click.echo('  Encoding: {}'.format(sub_file.encoding))
 
 
+def display_command(container):
+    """Echo the current compiled command for a given Container."""
+
+    click.secho('Command:', fg='cyan', bold=True)
+    click.echo(' '.join(container.build_command()))
+
+
 def add_subtitles(container):
-    """Add an external subtitle file. Allow the user to set a custom encoding.
+    """Add an external subtitle file to a given container.
 
     Args:
-        container (Container): The Container to add the subtitle file to.
+        container (Container): The Container to add a subtitle file to.
 
     Raises:
         UserCancelError: If the user cancels adding a subtitle file.
 
     """
 
-    sub_file, encoding = sub_file_prompt()
-    while True:
-        char = multiple_choice('Continue?', ['a', 'r', 's', 'c'],
-                               'accept / retry / specify custom / cancel')
-        if char == 'a':
-            if not encoding:
-                click.secho('Warning: No encoding specified. '
-                            'Retry or specify one.', fg='red')
-            else:
-                container.subtitle_files.append(
-                    SubtitleFile(sub_file, encoding))
-                break
-        elif char == 'r':
-            sub_file, encoding = sub_file_prompt()
-        elif char == 's':
-            encoding = click.prompt('Enter custom encoding')
-            click.echo('Custom encoding specified: {}'.format(encoding))
-        elif char == 'c':
-            raise UserCancelError('Cancelled subtitle file addition.')
+    try:
+        sub_file = click.prompt('Enter subtitle file name', type=click.Path(
+            exists=True, dir_okay=False, readable=True))
+    except click.exceptions.Abort:
+        raise UserCancelError('Cancelled adding subtitle file.')
+
+    container.add_subtitle_file(sub_file)
 
 
 def remove_subtitles(container):
@@ -277,31 +266,37 @@ def remove_subtitles(container):
             container.subtitle_files.pop(int(action))
 
 
-def sub_file_prompt():
-    """Prompt the user to specify a subtitle file.
+def change_subtitle_encoding(container):
+    """Set a custom encoding for a SubtitleFile in a given Container.
 
-    Use chardet to detect the character encoding. Display the detected
-    encoding and confidence to the user.
+    Args:
+        container (Container): The Container containing the subtitle file to be
+            change.
 
-    Returns:
-        string: The subtitle file name
-        string: The subtitle file encoding
+    Raises:
+        UserCancelError: If there are no subtitle files to change or the user
+            cancels changing a subtitle file.
 
     """
-    try:
-        sub_file = click.prompt('Enter subtitle file name', type=click.Path(
-            exists=True, dir_okay=False, readable=True))
-    except click.exceptions.Abort:
-        raise UserCancelError('Cancelled adding subtitle file.')
 
-    with open(sub_file, mode='rb') as _file:
-        line = _file.readline()
-    detected = chardet.detect(line)
-    click.echo(
-        'Subtitle file encoding detected as {}, with {}% confidence'.format(
-            detected['encoding'], int(detected['confidence']) * 100)
-    )
-    return sub_file, detected['encoding']
+    if not container.subtitle_files:
+        raise UserCancelError('There are no subtitle files to remove.')
+    else:
+        for index, subtitle in enumerate(container.subtitle_files):
+            click.secho('Number: {}'.format(index), fg='cyan', bold=True)
+            display_sub_file(subtitle)
+        file_indices = [str(i) for i in range(len(container.subtitle_files))]
+        acceptable = file_indices + ['c']
+        action = multiple_choice('Enter the file number to change, or c to '
+                                 'cancel:', acceptable)
+        if action == 'c':
+            raise UserCancelError('Cancelled subtitle file removal.')
+        else:
+            try:
+                encoding = click.prompt('Enter custom encoding')
+            except click.exceptions.Abort:
+                raise UserCancelError('Cancelled changing encoding.')
+            container.subtitle_files[int(action)].encoding = encoding
 
 
 def select_streams(container):
@@ -348,7 +343,7 @@ def edit_stream_options(container):
         if stream.type == 'video':
             if stream.codec == 'h264' and yes_no('Copy stream?'):
                 stream.custom_crf = None
-            elif yes_no('Use default crf?'):
+            elif yes_no('Use default crf ({})?'.format(DEFAULT_CRF)):
                 stream.custom_crf = DEFAULT_CRF
             else:
                 crf = click.prompt('Enter crf', type=click.IntRange(0, 51))
@@ -361,7 +356,8 @@ def edit_stream_options(container):
                     .format(stream.bitrate)
             ):
                 stream.custom_bitrate = stream.bitrate
-            elif yes_no('Use default bitrate (384Kib/s)?'):
+            elif yes_no('Use default bitrate ({}Kib/s)?'
+                        .format(DEFAULT_BITRATE)):
                 stream.custom_bitrate = DEFAULT_BITRATE
             else:
                 stream.custom_bitrate = click.prompt(
@@ -425,6 +421,125 @@ def build_containers(file_list):
     return sorted(containers, key=lambda container: container.file_name)
 
 
+def main_menu(containers):
+    """The main menu, which is loaded when running the convert command.
+
+    The main menu is presented for each container given, preceeded by a pretty
+    representation of the container and a description of the actions to be
+    taken. The user may select from the options Convert, Skip, Edit, and Quit.
+    If convert is selected, the conversion is started immediately in a
+    subprocess. However, those processes will be terminated if Quit is
+    subsequently selected.
+
+    Args:
+        containers (list): The Container objects to convert.
+
+    Returns:
+        list: The container objects whose convert processes have been started.
+
+    """
+
+    running = []
+    for container in containers:
+        menu = 'main'
+        while True:
+            if menu == 'main':
+                display_conversion(container)
+
+                menu = multiple_choice('Main Menu:', ['c', 's', 'e', 'q'],
+                                       'Convert/Skip/Edit/Quit')
+            elif menu == 'c':
+                container.convert()
+                running.append(container)
+                break
+            elif menu == 's':
+                break
+            elif menu == 'e':
+                edit_menu(container)
+                menu = 'main'
+            elif menu == 'q':
+                for running_container in running:
+                    running_container.process.terminate()
+                sys.exit('Conversion cancelled.')
+
+    return running
+
+
+def edit_menu(container):
+    """The edit menu, which is accessible from the main menu.
+
+    The user may elect to edit the Streams or SubtitleFiles associated with the
+    given container, change the ouput filename, display the raw ffmpeg command,
+    or return to the main menu.
+
+    Args:
+        container (Container): The Container object to edit.
+
+    """
+    menu = 'edit'
+    while True:
+        if menu == 'edit':
+            menu = multiple_choice('Edit Menu:', ['e', 's', 'f', 'd', 'c'],
+                                   'Edit Streams/Subtitle Files/'
+                                   'Change Filename/Display Command/Cancel')
+        elif menu == 'c':
+            break
+        else:
+            options = {'e': stream_menu, 's': subtitle_menu,
+                       'f': change_file_name, 'd': display_command}
+            try:
+                options[menu](container)
+            except UserCancelError as _e:
+                click.secho('{}Warning: {}'.format(os.linesep, _e.message),
+                            fg='red')
+            menu = 'edit'
+
+
+def stream_menu(container):
+    """The stream menu, which is accessible from the edit menu.
+
+    The user may elect to select the streams to be used in the output file or
+    edit the parameters of one of those streams.
+
+    Args:
+        container (Container): The Container object whose Stream objects to
+        select from or edit.
+
+    """
+
+    display_conversion(container)
+    menu = multiple_choice('Stream Menu:', ['s', 'e', 'c'],
+                           'Select Active Streams/Edit Stream/Cancel')
+    if menu == 'c':
+        return
+    else:
+        options = {'s': select_streams, 'e': edit_stream_options}
+        options[menu](container)
+
+
+def subtitle_menu(container):
+    """The subtitle menu, which is accessible from the edit menu.
+
+    The user may elect to add, remove, or change the encoding of a
+    SubtitleFile.
+
+    Args:
+        container (Container): The Container object whose SubtitleFile objects
+        to add, remove, or change.
+
+    """
+
+    display_conversion(container)
+    menu = multiple_choice('Subtitle File Menu:', ['a', 'r', 'e'],
+                           'Add/Remove/Change Encoding')
+    if menu == 'c':
+        return
+    else:
+        options = {'a': add_subtitles, 'r': remove_subtitles,
+                   'e': change_subtitle_encoding}
+        options[menu](container)
+
+
 @click.group()
 @click.option(
     '-f', '--file', help='Specify a file.',
@@ -484,41 +599,7 @@ def convert(ctx):
     """Convert video file(s)"""
 
     containers = build_containers(ctx.obj['FILES'])
-    running = []
-    for container in containers:
-        while True:
-            display_container(container)
-            display_conversion(container)
-            char = multiple_choice(
-                'Convert file?', ['y', 'n', 'a', 'r', 's', 'e', 'c', 'd'],
-                ('yes/no/{add,remove} subtitle file/{select,edit} streams/'
-                 'change filename/display command')
-            )
-            try:
-                if char == 'n':
-                    raise UserCancelError('Cancelled converting {}'
-                                          .format(container.file_name))
-                elif char == 'a':
-                    add_subtitles(container)
-                elif char == 'r':
-                    remove_subtitles(container)
-                elif char == 's':
-                    select_streams(container)
-                elif char == 'e':
-                    edit_stream_options(container)
-                elif char == 'c':
-                    change_file_name(container)
-                elif char == 'd':
-                    click.secho('Command:', fg='cyan', bold=True)
-                    click.echo(' '.join(container.build_command()))
-            except UserCancelError as _e:
-                click.secho('{}Warning: {}'.format(os.linesep, _e.message),
-                            fg='red')
-            if char == 'y':
-                container.convert()
-                running.append(container)
-            if char in ['y', 'n']:
-                break
+    running = main_menu(containers)
 
     total_ms = sum([container.microseconds for container in running])
     label = 'Processing {} files:'.format(len(running))
