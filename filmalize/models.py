@@ -10,10 +10,8 @@ from pathlib import PurePath
 import chardet
 import bitmath
 
+import filmalize.defaults as defaults
 from filmalize.errors import ProbeError
-
-DEFAULT_BITRATE = 384
-DEFAULT_CRF = 18
 
 
 class ContainerLabel(object):
@@ -398,7 +396,7 @@ class Stream(object):
             options.extend(['-c:v:{}'.format(number)])
             if self.custom_crf or self.codec != 'h264':
                 crf = (self.custom_crf if self.custom_crf
-                       else DEFAULT_CRF)
+                       else defaults.CRF)
                 options.extend(['libx264', '-preset', 'slow', '-crf', str(crf),
                                 '-pix_fmt', 'yuv420p'])
                 self.option_summary = ('transcode -> h264, crf={}'.format(crf))
@@ -410,7 +408,7 @@ class Stream(object):
             if self.custom_bitrate or self.codec != 'aac':
                 bitrate = (self.custom_bitrate if self.custom_bitrate
                            else self.labels.bitrate if self.labels.bitrate
-                           else DEFAULT_BITRATE)
+                           else defaults.BITRATE)
                 options.extend(['aac', '-b:a:{}'.format(number),
                                 '{}k'.format(bitrate)])
                 self.option_summary = ('transcode -> aac, '
