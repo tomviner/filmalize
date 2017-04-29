@@ -1,3 +1,5 @@
+"""Setup script for filmalize."""
+
 from setuptools import setup
 
 setup(
@@ -6,7 +8,7 @@ setup(
     packages=['filmalize'],
     include_package_data=True,
     install_requires=[
-        'click', 'bitmath', 'colorama', 'chardet'
+        'click', 'bitmath', 'colorama', 'chardet', 'blessed', 'progressbar2'
     ],
     entry_points='''
         [console_scripts]

@@ -2,3 +2,5 @@ click
 bitmath
 colorama
 chardet
+blessed
+progressbar2

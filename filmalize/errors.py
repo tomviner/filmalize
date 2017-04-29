@@ -20,3 +20,15 @@ class UserCancelError(Error):
 
     def __init__(self, message=None):
         self.message = message if message else ''
+
+
+class ProgressFinishedError(Error):
+    """Custom Exception for when a container has finished processing."""
+
+    pass
+
+class NoProgressError(Error):
+    """Custom Exception for when we are unable to track the transcoding
+    progress of a container."""
+
+    pass

@@ -7,12 +7,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import PurePath
 
 import click
+import progressbar
+import blessed
 
-from filmalize.errors import ProbeError, UserCancelError
+from filmalize.errors import (ProbeError, UserCancelError, NoProgressError,
+                              ProgressFinishedError)
 from filmalize.models import Container
 
 DEFAULT_BITRATE = 384
 DEFAULT_CRF = 18
+# Allow help to be called with '-h' as well as the default '--help'.
+CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'])
 
 
 class SelectedStreams(click.ParamType):
@@ -41,6 +46,85 @@ class SelectedStreams(click.ParamType):
 
         else:
             return selected
+
+
+class Writer(object):
+    """An object to write to method that writes to a specific line on the
+    screen, defined at instantiation. This is to be used as a file descriptor
+    for a progresbar.ProgressBar object."""
+
+    def __init__(self, line, terminal, color=None):
+        """Populate instance variables.
+
+        Note:
+            The optional color argument must conform to the Blessed color
+            attribute format as it will be called.
+
+        Args:
+            line (int): The line of the screen for this instance to write to.
+            terminal (blessed.Terminal): The Terminal object with which to
+                write.
+            color (str, optional): The color to print in.
+
+        """
+
+        self.line = line
+        self.terminal = terminal
+        self.color = color
+
+    def write(self, message):
+        """Write a message to the screen.
+
+        The message is written to the blessed.Terminal object stored in
+        self.terminal, and in self.color, if set.
+
+        Args:
+            message (str): The message to display
+
+        """
+        with self.terminal.location(x=0, y=self.line):
+            if self.color:
+                print(getattr(self.terminal, self.color)(message))
+            else:
+                print(message)
+
+    @staticmethod
+    def flush():
+        """progresbar.ProgressBar objects expect to flush their file
+        descriptors, but we don't need to worry about that."""
+        return True
+
+
+class ErrorWriter(object):
+    """Writes messages in bright red to the bottom of a Terminal."""
+
+    def __init__(self, terminal):
+        """Populate instance variables.
+
+        Args:
+            terminal (blessed.Terminal): The Terminal object to write to.
+
+        """
+
+        self.terminal = terminal
+        self.line = terminal.height
+        self.messages = []
+
+    def write(self, message):
+        """Write a message to the next lowest line on the Terminal.
+
+        Next, decrement self.line so that the following message goes in the
+        right place. Finally, add message to self.messages for safekeeping.
+
+        Args:
+            message (str): The message to display.
+
+        """
+
+        with self.terminal.location(x=0, y=self.line):
+            print(self.terminal.red(message))
+        self.line -= 1
+        self.messages.append(message)
 
 
 def exclusive(ctx_params, exclusive_params, error_message):
@@ -351,11 +435,11 @@ def edit_stream_options(container):
         elif stream.type == 'audio':
             if stream.codec == 'aac' and yes_no('Copy stream?'):
                 stream.custom_bitrate = None
-            elif stream.bitrate and yes_no(
+            elif stream.labels.bitrate and yes_no(
                     'Use source bitrate ({}Kib/s)?'
-                    .format(stream.bitrate)
+                    .format(stream.labels.bitrate)
             ):
-                stream.custom_bitrate = stream.bitrate
+                stream.custom_bitrate = stream.labels.bitrate
             elif yes_no('Use default bitrate ({}Kib/s)?'
                         .format(DEFAULT_BITRATE)):
                 stream.custom_bitrate = DEFAULT_BITRATE
@@ -479,10 +563,10 @@ def edit_menu(container):
     menu = 'edit'
     while True:
         if menu == 'edit':
-            menu = multiple_choice('Edit Menu:', ['e', 's', 'f', 'd', 'c'],
+            menu = multiple_choice('Edit Menu:', ['e', 's', 'f', 'd', 'm'],
                                    'Edit Streams/Subtitle Files/'
-                                   'Change Filename/Display Command/Cancel')
-        elif menu == 'c':
+                                   'Change Filename/Display Command/Main Menu')
+        elif menu == 'm':
             break
         else:
             options = {'e': stream_menu, 's': subtitle_menu,
@@ -540,7 +624,82 @@ def subtitle_menu(container):
         options[menu](container)
 
 
-@click.group()
+def get_progress(container):
+    """Get the transcoding progress of a given Container in microseconds.
+
+    Args:
+        container (Container): The Container whose transcoding process to
+            check.
+
+    Returns:
+        int: The number of microseconds of the file that ffmpeg has finished
+            transcoding.
+
+    Raises:
+        ProgressFinishedError: If the subprocess is not running (either
+            finished or errored out).
+        NoProgressError: If unable to read the progress from the temp_file.
+
+
+    """
+
+    if container.process.poll() is not None:
+        raise ProgressFinishedError
+    else:
+        with open(container.temp_file.name, 'r') as status:
+            line_list = status.readlines()
+        microsec = 0
+        for line in reversed(line_list):
+            if line.split('=')[0] == 'out_time_ms':
+                try:
+                    microsec = int(line.split('=')[1])
+                    break
+                except (ValueError, TypeError):
+                    raise NoProgressError
+
+        pre_progress = container.progress
+        container.progress = microsec
+        return microsec - pre_progress
+
+
+def build_progress_bars(running, terminal):
+    """Create ProgressBar objects for each Container in the given list as well
+    as one for all of them.
+
+    The ProgressBar objects are added to each Container as pr_bar.
+
+    Args:
+        running (list): The Container objects to create ProgressBar objects
+            for.
+        terminal (blessed.Terminal): The object to attach each ProgressBar
+            object to.
+
+    Returns:
+        progresbar.ProgressBar: An object for tracking the progress of all of
+            the passed Containers.
+
+    """
+
+    padding = max([len(container.file_name) for container in running])
+    for line_number, container in enumerate(running):
+        label = '{n:{l}}'.format(n=container.file_name, l=padding)
+        widgets = [label, ' | ', progressbar.Percentage(), ' ',
+                   progressbar.Bar(), ' ', ' | ', progressbar.ETA()]
+        writer = Writer(line_number + 2, terminal, 'red_on_black')
+        container.pr_bar = progressbar.ProgressBar(
+            max_value=container.microseconds, widgets=widgets, fd=writer)
+
+    writer = Writer(0, terminal, 'bold_blue_on_black')
+    total_ms = sum([container.microseconds for container in running])
+    label = 'Processing {} files:'.format(len(running))
+    widgets = [label, ' | ', progressbar.Percentage(), ' ', progressbar.Bar(),
+               ' ', progressbar.Timer(), ' | ', progressbar.ETA()]
+
+    return progressbar.ProgressBar(max_value=total_ms, widgets=widgets,
+                                   fd=writer)
+
+
+@click.group(context_settings=CONTEXT_SETTINGS)
 @click.option(
     '-f', '--file', help='Specify a file.',
     type=click.Path(exists=True, dir_okay=False, readable=True),
@@ -600,34 +759,37 @@ def convert(ctx):
 
     containers = build_containers(ctx.obj['FILES'])
     running = main_menu(containers)
+    terminal = blessed.Terminal()
+    pr_bar = build_progress_bars(running, terminal)
+    err = ErrorWriter(terminal)
 
-    total_ms = sum([container.microseconds for container in running])
-    label = 'Processing {} files:'.format(len(running))
-    with click.progressbar(length=total_ms, label=label) as pr_bar:
+    with terminal.fullscreen():
         while running:
             for container in running:
-                if container.process.poll() is not None:
+                try:
+                    progress = get_progress(container)
+                    container.pr_bar.update(container.pr_bar.value + progress)
+                except (ProgressFinishedError, NoProgressError) as _e:
                     if container.process.returncode:
-                        click.secho('Warning: ffmpeg error while converting'
-                                    '{}'.format(container.file_name),
-                                    fg='red')
-                        click.echo(container.process.communicate()[1]
-                                   .strip(os.linesep))
-                    pr_bar.update(container.microseconds - container.progress)
+                        err.write('Warning: ffmpeg error while converting'
+                                  '{}'.format(container.file_name))
+                        err.write(container.process.communicate()[1]
+                                  .strip(os.linesep))
+                    if isinstance(_e, NoProgressError):
+                        err.write('Warning: Unable to track progress of {}'
+                                  .format(container.file_name))
+
                     running.remove(container)
-                else:
-                    with open(container.temp_file.name, 'r') as status:
-                        line_list = status.readlines()
-                    microsec = 0
-                    for line in reversed(line_list):
-                        if line.split('=')[0] == 'out_time_ms':
-                            if line.split('=')[1].strip(os.linesep).isdigit():
-                                microsec = int(line.split('=')[1])
-                                break
-                    if microsec:
-                        pr_bar.update(microsec - container.progress)
-                        container.progress = microsec
-            time.sleep(1)
+                    progress = (container.microseconds - container.progress)
+                    container.pr_bar.finish()
+
+                pr_bar.update(pr_bar.value + progress)
+
+            time.sleep(0.2)
+
+    pr_bar.finish()
+    for message in err.messages:
+        click.secho(message, fg='red', bg='black', )
 
 
 if __name__ == '__main__':
