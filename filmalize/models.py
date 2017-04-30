@@ -1,4 +1,11 @@
-"""Custom objects for filmalize."""
+"""Core classes for filmalize.
+
+This module contains the classes that do most of the heavy lifting. It should
+stand alone, and allow for other interfaces to be built using it. The main
+class is the Container, which may be created manually, or with the
+:obj:`classmethod` :obj:`Container.from_file`.
+
+"""
 
 import os
 import datetime
@@ -15,27 +22,29 @@ from filmalize.errors import ProbeError
 
 
 class ContainerLabel(object):
-    """Labels for Container objects"""
+    """Labels for :obj:`Container` objects
+
+    Note:
+        The information stored here is simply for display and will not affect
+        the output file.
+
+    Args:
+        title (:obj:`str`, optional): Container title.
+        size (:obj:`float`, optional): Container file size in MiBs.
+        bitrate (:obj:`float`, optional): Container overall bitrate in Mib/s.
+        container_format (:obj:`str`, optional): Container file format.
+
+    Attributes:
+        title (:obj:`str`): Container title.
+        size (:obj:`float`): Container file size in MiBs.
+        bitrate (:obj:`float`): Container overall bitrate in Mib/s.
+        container_format (:obj:`str`): Container file format.
+
+    """
 
     def __init__(self, title=None, size=None, bitrate=None,
                  container_format=None):
-        """Populate Container Label object instance variables.
 
-        Note:
-            The information stored here is simply for display and will not
-            affect the output file.
-
-            All arguments are optional.
-
-        Args:
-            title (str, optional): Container title label.
-            size (float, optional): Container size label in MiBs.
-            bitrate (float, optional): Container bitrate label in Mib/s.
-            container_format (str, optional): Container format label.
-                Regardless of the presence of this label, the container must be
-                a format that ffmpeg can process.
-
-        """
         self.title = title if title else ''
         self.size = size if size else ''
         self.bitrate = bitrate if bitrate else ''
@@ -43,31 +52,54 @@ class ContainerLabel(object):
 
 
 class Container(object):
-    """Multimedia container file object."""
+    """Multimedia container file object.
+
+    Args:
+        file_name (:obj:`str`): The name of the input file.
+        duration (:obj:`float`): The duration of the streams in the container
+            in seconds.
+        streams (:obj:`list` of :obj:`Stream`): The mutimedia streams in this
+            :obj:`Container`.
+        subtitle_files (:obj:`list` of :obj:`SubtitleFile`, optional): Subtitle
+            files to add to the output file.
+        selected (:obj:`list` of :obj:`int`, optional): Indexes of the
+            :obj:`Stream` instances to include in the output file. If not
+            specified, the first audio and video stream will be selected.
+        output_name (:obj:`str`, optional): Output filename. If not specified,
+            the output filename will be set to be the same as the input file,
+            but with the extension replaced with the proper one for the
+            output format.
+        labels (:obj:`ContainerLabel`, optional): Informational metadata about
+            the input file.
+
+    Attributes:
+        file_name (:obj:`str`): The name of the input file.
+        duration (:obj:`float`): The duration of the streams in the container
+            in seconds.
+        streams (:obj:`list` of :obj:`Stream`): The mutimedia streams in this
+            :obj:`Container`.
+        subtitle_files (:obj:`list` of :obj:`SubtitleFile`): Subtitle files to
+            add to the output file.
+        selected (:obj:`list` of :obj:`int`): Indexes of the :obj:`Stream`
+            instances to include in the output file.
+        output_name (:obj:`str`): Output filename.
+        labels (:obj:`ContainerLabel`): Informational metadata about the input
+            file.
+        microseconds (:obj:`int`): The duration of the file expressed in
+            microseconds.
+        length (:obj:`datetime.timedelta`): The duration of the file as a
+            timedelta.
+        temp_file (:obj:`tempfile.NamedTemporaryFile`): The temporary file for
+            ffmpeg to write status information to.
+        progress (:obj:`int`): The number of microseconds that ffmpeg has
+            processed.
+        process (:obj:`subprocess.Popen`): The subprocess in which ffmpeg
+            processes the file.
+
+    """
 
     def __init__(self, file_name, duration, streams, subtitle_files=None,
                  selected=None, output_name=None, labels=None):
-        """Populate container object properties and instance variables.
-
-        Args:
-            file_name (str): The multimedia container file to represent.
-            duration (float): The duration of the streams in the container in
-                seconds.
-            streams (list): The Stream objects representing the mutimedia
-                streams in this container.
-            subtitle_files (list, optional): SubtitleFile objects representing
-                subtitle files to add to the output file.
-            selected (list, optional): Integer stream indexes of the streams to
-                include in the output file. If not specified, the first audio
-                and video stream will be selected.
-            output_name (str, optional): Output filename. If not specified, the
-                output filename will be set to be the same as the input file,
-                but with the extension replaced with the proper one for the
-                output format.
-            labels (ContainerLabel, optional): Informational metadata about the
-                input file.
-
-        """
 
         self.file_name = file_name
         self.duration = duration
@@ -85,20 +117,22 @@ class Container(object):
 
     @classmethod
     def from_file(cls, file_name):
-        """Build a Container instance from a given multimedia file.
+        """Build a :obj:`Container` from a given multimedia file.
 
         Attempt to probe the file with ffprobe. If the probe is succesful,
-        finish instatiation using the results of the probe, building Stream
-        instances as necessary.
+        finish instatiation using the results of the probe, building
+        :obj:`Stream` instances as necessary.
 
         Args:
-            file_name (str): The file (a multimedia container) to represent.
+            file_name (:obj:`str`): The file (a multimedia container) to
+            represent.
 
         Returns:
-            Container: Instance representing the given file.
+            :obj:`Container`: Instance representing the given file.
 
         Raises:
-            ProbeError: If ffprobe is unable to successfully probe the file.
+            :obj:`ProbeError`: If ffprobe is unable to successfully probe the
+                file.
 
         """
 
@@ -133,22 +167,24 @@ class Container(object):
 
     @property
     def streams_dict(self):
-        """dict: The streams keyed by their indexes."""
+        """:obj:`dict` of {:obj:`int`: :obj:`Stream`}: The :obj:`Stream`
+        instances in :obj:`Container.streams` keyed by their indexes."""
         return {stream.index: stream for stream in self.streams}
 
     def acceptable_streams(self, index_list):
-        """Determine if all of the indexes in a list match a Stream in
-             self.streams.
+        """Determine if all of the indexes in a list match a :obj:`Stream` in
+        :obj:`self.streams`.
 
         Args:
-            index_list (list of int): Indexes that may correspond to Streams.
+            index_list (:obj:`list` of :obj:`int`): Indexes that may correspond
+                to :obj:`Stream` instances.
 
         Returns:
-            bool: True if all of the indexes are valid.
+            :obj:`bool`: True if all of the indexes are valid.
 
         Raises:
-            StreamSelectionError: If list contains an index that does not
-                correspond to any Stream in self.streams.
+            :obj:`StreamSelectionError`: If list contains an index that does
+                not correspond to any :obj:`Stream` in :obj:`self.streams`.
 
         """
 
@@ -163,7 +199,8 @@ class Container(object):
         return True
 
     def default_streams(self):
-        """Return a list of the indexes of the first video and audio stream."""
+        """Return a :obj:`list` of :obj:`int` the indexes of the first video
+        and audio stream."""
 
         streams = []
         audio, video = None, None
@@ -178,8 +215,8 @@ class Container(object):
         return streams
 
     def default_name(self):
-        """Return a string; self.file_name with the proper extension for the
-        output format."""
+        """Return :obj:`self.file_name` reformatted with the proper extension
+        for the output format."""
 
         return PurePath(self.file_name).stem + defaults.ENDING
 
@@ -188,8 +225,8 @@ class Container(object):
         encoding.
 
         Args:
-            file_name (str): The name of the subtitle file.
-            encoding (str, optional): The encoding of the subtitle file.
+            file_name (:obj:`str`): The name of the subtitle file.
+            encoding (:obj:`str`, optional): The encoding of the subtitle file.
 
         """
 
@@ -207,10 +244,12 @@ class Container(object):
     def build_command(self):
         """Build the ffmpeg command to process this container.
 
-        Generate appropriate ffmpeg options to process the selected streams.
+        Generate appropriate ffmpeg options to process the streams selected in
+        :obj:`self.selected`.
 
         Returns:
-            list: The ffmpeg command and options to execute.
+            :obj:`list` of :obj:`str`: The ffmpeg command and options to
+                execute.
 
         """
 
@@ -240,34 +279,39 @@ class Container(object):
 
 
 class StreamLabel(object):
-    """Labels for Stream objects"""
+    """Labels for :obj:`Stream` objects.
+
+    Note:
+        The information stored here is simply for display and (with one
+        exception) will not affect the output file.
+
+        For audio streams, if this stream cannot be copied and must be
+        transcoded, and if there is a value stored in self.bitrate, that
+        value will be chosen by default as the output stream target
+        bitrate.
+
+    Args:
+        title (:obj:`str`): Stream title.
+        bitrate (:obj:`float`): Stream bitrate in Mib/s for video streams or
+            Kib/s for audio streams.
+        resolution (:obj:`str`): Stream resolution.
+        language (:obj:`str`): Language name or abbreviation.
+        channels (:obj:`str`): Audio channel information (stereo, 5.1, etc.).
+        default (:obj:`bool`): True if this stream is the default stream of its
+            type, else False.
+
+    Attributes:
+        title (:obj:`str`): Stream title.
+        bitrate (:obj:`float`): Stream bitrate in Mib/s for video streams or
+            Kib/s for audio streams.
+        resolution (:obj:`str`): Stream resolution.
+        language (:obj:`str`): Language name or abbreviation.
+        channels (:obj:`str`): Audio channel information (stereo, 5.1, etc.).
+
+    """
 
     def __init__(self, title=None, bitrate=None, resolution=None,
                  language=None, channels=None, default=None):
-        """Populate StreamLabel object instance variables.
-
-        Note:
-            The information stored here is simply for display and (with one
-            exception) will not affect the output file.
-
-            For audio streams, if this stream cannot be copied and must be
-            transcoded, and if there is a value stored in self.bitrate, that
-            value will be chosen by default as the output stream target
-            bitrate.
-
-            All Arguments are optional.
-
-        Args:
-            title (str): Stream title.
-            bitrate (float): Stream bitrate in Mib/s for video streams or Kib/s
-                for audio streams.
-            resolution (str): Stream resolution.
-            language (str): Language name or abbreviation.
-            channels (str): Audio channel information (stereo, 5.1, etc.).
-            default (bool): True if this stream is the default stream of its
-                type, else False.
-
-        """
 
         self.title = title if title else ''
         self.bitrate = bitrate if bitrate else ''
@@ -278,8 +322,8 @@ class StreamLabel(object):
 
     @property
     def default(self):
-        """str: 'default' if this stream is the default stream of its type,
-            else ''.
+        """:obj:`str`: 'default' if this stream is the default stream of its
+        type, else ''.
 
         Args:
             is_default (bool): True if this stream is the default stream of its
@@ -294,29 +338,50 @@ class StreamLabel(object):
 
 
 class Stream(object):
-    """Multimedia stream object."""
+    """Multimedia stream object.
+
+    Note:
+        At this time, :obj:`Stream` instances will only be included in the
+        output file if they have type of 'audio', 'video', or 'subtitle'.
+
+    Args:
+        index (:obj:`int`): The stream index.
+        stream_type (:obj:`str`): The multimedia type of the stream as reported
+            by ffprobe.
+        codec (:obj:`str`): The codec with which the stream is encoded as
+            as reported by ffprobe.
+        custom_crf (:obj:`int`, optional): Video stream Constant Rate Factor.
+            If specified, this stream will be transcoded using this crf even
+            if the input stream is suitable for copying to the output file.
+        custom_bitrate (:obj:`float`, optional): Audio stream ouput bitrate in
+            Kib/s. If specified, this audio stream will be transcoded using
+            this as the target bitrate even if the input stream is suitable for
+            copying and even if there is a bitrate set in the
+            :obj:`StreamLabel`.
+        labels (:obj:`StreamLabel`, optional): Informational metadata about the
+            input stream.
+
+    Attributes:
+        index (:obj:`int`): The stream index.
+        stream_type (:obj:`str`): The multimedia type of the stream as reported
+            by ffprobe.
+        codec (:obj:`str`): The codec with which the stream is encoded as
+            as reported by ffprobe.
+        custom_crf (:obj:`int`): Video stream Constant Rate Factor.
+            If set, this stream will be transcoded using this crf even
+            if the input stream is suitable for copying to the output file.
+        custom_bitrate (:obj:`float`): Audio stream ouput bitrate in Kib/s. If
+            set, this audio stream will be transcoded using this as
+            the target bitrate even if the input stream is suitable for
+            copying and even if there is a bitrate set in the
+            :obj:`StreamLabel`.
+        labels (:obj:`StreamLabel`): Informational metadata about the
+            input stream.
+
+    """
 
     def __init__(self, index, stream_type, codec, custom_crf=None,
                  custom_bitrate=None, labels=None):
-        """Populate Stream object instance variables.
-
-        Args:
-            index (int): The stream index.
-            stream_type (str): The multimedia type of the stream. Streams will
-                be included only if they are of type 'audio', 'video', or
-                'subtitle'.
-            codec (str): The codec with which the stream is encoded.
-            custom_crf (int, optional): Video stream Constant Rate Factor. If
-                specified, this stream will be transcoded using this crf even
-                if the input stream is suitable for copying to the output file.
-            custom_bitrate (float): Audio stream ouput bitrate in Kib/s. If
-                specified, this audio stream will be transcoded using this as
-                the target bitrate even if the input stream is suitable for
-                copying and even if labels.bitrate is set (see StreamLabel).
-            labels (StreamLabel, optional): Informational metadata about the
-                input stream.
-
-        """
 
         self.index = index
         self.type = stream_type
@@ -329,14 +394,15 @@ class Stream(object):
 
     @classmethod
     def from_dict(cls, stream_info):
-        """Build a Stream instance from a dictionary.
+        """Build a :obj:`Stream` instance from a dictionary.
 
             Args:
-                stream_info (dict): Stream information in dictionary format
-                    structured in the manner of ffprobe json output.
+                stream_info (:obj:`dict`): Stream information in dictionary
+                    format structured in the manner of ffprobe json output.
 
             Returns:
-                Stream: Instance populated with data from the given dict.
+                :obj:`Stream`: Instance populated with data from the given
+                    dictionary.
 
         """
 
@@ -378,18 +444,18 @@ class Stream(object):
         return cls(index, stream_type, codec, labels=labels)
 
     def build_options(self, number=0):
-        """Generate ffmpeg codec/bitrate options for this Stream.
+        """Generate ffmpeg codec/bitrate options for this :obj:`Stream`.
 
         The options generated will use custom values for video CRF or audio
         bitrate, if specified, or the default values. The option_summary is
         updated to reflect the selected options.
 
         Args:
-            number (int, optional): The number of Streams of this type that
-            have been added to the command.
+            number (:obj:`int`, optional): The number of Streams of this type
+                that have been added to the command.
 
         Returns:
-            list: The ffmpeg options for this Stream.
+            :obj:`list` of :obj:`str`: The ffmpeg options for this Stream.
 
         """
 
@@ -427,16 +493,22 @@ class Stream(object):
 
 
 class SubtitleFile(object):
-    """Subtitle file object."""
+    """Subtitle file object.
+
+    Args:
+        file_name (:obj:`str`): The subtitle file to represent.
+        encoding (:obj:`str`, optional): The file encoding of the subtitle
+            file.
+
+    Attributes:
+        file_name (:obj:`str`): The subtitle file represented.
+        encoding (:obj:`str`): The file encoding of the subtitle file.
+
+
+    """
 
     def __init__(self, file_name, encoding=None):
-        """Populate SubtitleFile object instance variables.
 
-        Args:
-            file_name (str): The subtitle file to represent.
-            encoding (str, optional): The file encoding of the subtitle file.
-
-        """
         self.file_name = file_name
         self.encoding = encoding if encoding else self.guess_encoding()
         self.options = [defaults.C_SUBS]

@@ -5,7 +5,7 @@ System Dependencies:
     * python 3.4
 
 Todo:
-    * Config file
+    * Config file -> click get_app_dir() or os.path.expanduser('~')?
     * Filename whitelist?
     * Tests
     * Status interrupts

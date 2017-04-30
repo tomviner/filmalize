@@ -1,3 +1,5 @@
 pip-tools
 flake8
 pylint
+sphinx
+sphinx_rtd_theme

@@ -1,0 +1,743 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="en" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="en" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>models &mdash; filmalize  documentation</title>
+  
+
+  
+  
+  
+  
+
+  
+
+  
+  
+    
+
+  
+
+  
+  
+    <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+  
+
+  
+
+  
+        <link rel="index" title="Index"
+              href="../genindex.html"/>
+        <link rel="search" title="Search" href="../search.html"/>
+    <link rel="top" title="filmalize  documentation" href="../index.html"/>
+        <link rel="up" title="Module code" href="index.html"/> 
+
+  
+  <script src="../_static/js/modernizr.min.js"></script>
+
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+   
+  <div class="wy-grid-for-nav">
+
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search">
+          
+
+          
+            <a href="../index.html" class="icon icon-home"> filmalize
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <!-- Local TOC -->
+              <div class="local-toc"></div>
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" role="navigation" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">filmalize</a>
+        
+      </nav>
+
+
+      
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="../index.html">Docs</a> &raquo;</li>
+        
+          <li><a href="index.html">Module code</a> &raquo;</li>
+        
+      <li>models</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <h1>Source code for models</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Core classes for filmalize.</span>
+
+<span class="sd">This module contains the classes that do most of the heavy lifting. It should</span>
+<span class="sd">stand alone, and allow for other interfaces to be built using it. The main</span>
+<span class="sd">class is the Container, which may be created manually, or with the</span>
+<span class="sd">:obj:`classmethod` :obj:`Container.from_file`.</span>
+
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">datetime</span>
+<span class="kn">import</span> <span class="nn">tempfile</span>
+<span class="kn">import</span> <span class="nn">subprocess</span>
+<span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">from</span> <span class="nn">pathlib</span> <span class="k">import</span> <span class="n">PurePath</span>
+
+<span class="kn">import</span> <span class="nn">chardet</span>
+<span class="kn">import</span> <span class="nn">bitmath</span>
+
+<span class="kn">import</span> <span class="nn">filmalize.defaults</span> <span class="k">as</span> <span class="nn">defaults</span>
+<span class="kn">from</span> <span class="nn">filmalize.errors</span> <span class="k">import</span> <span class="n">ProbeError</span>
+
+
+<div class="viewcode-block" id="ContainerLabel"><a class="viewcode-back" href="../index.html#models.ContainerLabel">[docs]</a><span class="k">class</span> <span class="nc">ContainerLabel</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Labels for :obj:`Container` objects</span>
+
+<span class="sd">    Note:</span>
+<span class="sd">        The information stored here is simply for display and will not affect</span>
+<span class="sd">        the output file.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        title (:obj:`str`, optional): Container title.</span>
+<span class="sd">        size (:obj:`float`, optional): Container file size in MiBs.</span>
+<span class="sd">        bitrate (:obj:`float`, optional): Container overall bitrate in Mib/s.</span>
+<span class="sd">        container_format (:obj:`str`, optional): Container file format.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        title (:obj:`str`): Container title.</span>
+<span class="sd">        size (:obj:`float`): Container file size in MiBs.</span>
+<span class="sd">        bitrate (:obj:`float`): Container overall bitrate in Mib/s.</span>
+<span class="sd">        container_format (:obj:`str`): Container file format.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">bitrate</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">container_format</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">title</span> <span class="o">=</span> <span class="n">title</span> <span class="k">if</span> <span class="n">title</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">size</span> <span class="o">=</span> <span class="n">size</span> <span class="k">if</span> <span class="n">size</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bitrate</span> <span class="o">=</span> <span class="n">bitrate</span> <span class="k">if</span> <span class="n">bitrate</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">container_format</span> <span class="o">=</span> <span class="n">container_format</span> <span class="k">if</span> <span class="n">container_format</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span></div>
+
+
+<div class="viewcode-block" id="Container"><a class="viewcode-back" href="../index.html#models.Container">[docs]</a><span class="k">class</span> <span class="nc">Container</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Multimedia container file object.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        file_name (:obj:`str`): The name of the input file.</span>
+<span class="sd">        duration (:obj:`float`): The duration of the streams in the container</span>
+<span class="sd">            in seconds.</span>
+<span class="sd">        streams (:obj:`list` of :obj:`Stream`): The mutimedia streams in this</span>
+<span class="sd">            :obj:`Container`.</span>
+<span class="sd">        subtitle_files (:obj:`list` of :obj:`SubtitleFile`, optional): Subtitle</span>
+<span class="sd">            files to add to the output file.</span>
+<span class="sd">        selected (:obj:`list` of :obj:`int`, optional): Indexes of the</span>
+<span class="sd">            :obj:`Stream` instances to include in the output file. If not</span>
+<span class="sd">            specified, the first audio and video stream will be selected.</span>
+<span class="sd">        output_name (:obj:`str`, optional): Output filename. If not specified,</span>
+<span class="sd">            the output filename will be set to be the same as the input file,</span>
+<span class="sd">            but with the extension replaced with the proper one for the</span>
+<span class="sd">            output format.</span>
+<span class="sd">        labels (:obj:`ContainerLabel`, optional): Informational metadata about</span>
+<span class="sd">            the input file.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        file_name (:obj:`str`): The name of the input file.</span>
+<span class="sd">        duration (:obj:`float`): The duration of the streams in the container</span>
+<span class="sd">            in seconds.</span>
+<span class="sd">        streams (:obj:`list` of :obj:`Stream`): The mutimedia streams in this</span>
+<span class="sd">            :obj:`Container`.</span>
+<span class="sd">        subtitle_files (:obj:`list` of :obj:`SubtitleFile`): Subtitle files to</span>
+<span class="sd">            add to the output file.</span>
+<span class="sd">        selected (:obj:`list` of :obj:`int`): Indexes of the :obj:`Stream`</span>
+<span class="sd">            instances to include in the output file.</span>
+<span class="sd">        output_name (:obj:`str`): Output filename.</span>
+<span class="sd">        labels (:obj:`ContainerLabel`): Informational metadata about the input</span>
+<span class="sd">            file.</span>
+<span class="sd">        microseconds (:obj:`int`): The duration of the file expressed in</span>
+<span class="sd">            microseconds.</span>
+<span class="sd">        length (:obj:`datetime.timedelta`): The duration of the file as a</span>
+<span class="sd">            timedelta.</span>
+<span class="sd">        temp_file (:obj:`tempfile.NamedTemporaryFile`): The temporary file for</span>
+<span class="sd">            ffmpeg to write status information to.</span>
+<span class="sd">        progress (:obj:`int`): The number of microseconds that ffmpeg has</span>
+<span class="sd">            processed.</span>
+<span class="sd">        process (:obj:`subprocess.Popen`): The subprocess in which ffmpeg</span>
+<span class="sd">            processes the file.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_name</span><span class="p">,</span> <span class="n">duration</span><span class="p">,</span> <span class="n">streams</span><span class="p">,</span> <span class="n">subtitle_files</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">selected</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">output_name</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">file_name</span> <span class="o">=</span> <span class="n">file_name</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">duration</span> <span class="o">=</span> <span class="n">duration</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">streams</span> <span class="o">=</span> <span class="n">streams</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subtitle_files</span> <span class="o">=</span> <span class="n">subtitle_files</span> <span class="k">if</span> <span class="n">subtitle_files</span> <span class="k">else</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">output_name</span> <span class="o">=</span> <span class="n">output_name</span> <span class="k">if</span> <span class="n">output_name</span> <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">default_name</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">selected</span> <span class="o">=</span> <span class="n">selected</span> <span class="k">if</span> <span class="n">selected</span> <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">default_streams</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">labels</span> <span class="o">=</span> <span class="n">labels</span> <span class="k">if</span> <span class="n">labels</span> <span class="k">else</span> <span class="n">ContainerLabel</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">microseconds</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">duration</span> <span class="o">*</span> <span class="mi">1000000</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">length</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="nb">round</span><span class="p">(</span><span class="n">duration</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">temp_file</span> <span class="o">=</span> <span class="n">tempfile</span><span class="o">.</span><span class="n">NamedTemporaryFile</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">progress</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">process</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="nd">@classmethod</span>
+<div class="viewcode-block" id="Container.from_file"><a class="viewcode-back" href="../index.html#models.Container.from_file">[docs]</a>    <span class="k">def</span> <span class="nf">from_file</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">file_name</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Build a :obj:`Container` from a given multimedia file.</span>
+
+<span class="sd">        Attempt to probe the file with ffprobe. If the probe is succesful,</span>
+<span class="sd">        finish instatiation using the results of the probe, building</span>
+<span class="sd">        :obj:`Stream` instances as necessary.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            file_name (:obj:`str`): The file (a multimedia container) to</span>
+<span class="sd">            represent.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            :obj:`Container`: Instance representing the given file.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            :obj:`ProbeError`: If ffprobe is unable to successfully probe the</span>
+<span class="sd">                file.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">probe_response</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+            <span class="p">[</span><span class="n">defaults</span><span class="o">.</span><span class="n">FFPROBE</span><span class="p">,</span> <span class="s1">&#39;-v&#39;</span><span class="p">,</span> <span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="s1">&#39;-show_format&#39;</span><span class="p">,</span>
+             <span class="s1">&#39;-show_streams&#39;</span><span class="p">,</span> <span class="s1">&#39;-of&#39;</span><span class="p">,</span> <span class="s1">&#39;json&#39;</span><span class="p">,</span> <span class="n">file_name</span><span class="p">],</span>
+            <span class="n">stdout</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">PIPE</span><span class="p">,</span> <span class="n">stderr</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">PIPE</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">probe_response</span><span class="o">.</span><span class="n">returncode</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="n">ProbeError</span><span class="p">(</span><span class="n">file_name</span><span class="p">,</span> <span class="n">probe_response</span><span class="o">.</span><span class="n">stderr</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s1">&#39;utf-8&#39;</span><span class="p">)</span>
+                             <span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">linesep</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">probe_info</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">probe_response</span><span class="o">.</span><span class="n">stdout</span><span class="p">)</span>
+            <span class="n">labels</span> <span class="o">=</span> <span class="n">ContainerLabel</span><span class="p">()</span>
+            <span class="n">duration</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">probe_info</span><span class="p">[</span><span class="s1">&#39;format&#39;</span><span class="p">][</span><span class="s1">&#39;duration&#39;</span><span class="p">])</span>
+            <span class="n">streams</span> <span class="o">=</span> <span class="p">[</span><span class="n">Stream</span><span class="o">.</span><span class="n">from_dict</span><span class="p">(</span><span class="n">stream</span><span class="p">)</span>
+                       <span class="k">for</span> <span class="n">stream</span> <span class="ow">in</span> <span class="n">probe_info</span><span class="p">[</span><span class="s1">&#39;streams&#39;</span><span class="p">]]</span>
+
+            <span class="k">if</span> <span class="p">(</span><span class="s1">&#39;tags&#39;</span> <span class="ow">in</span> <span class="n">probe_info</span><span class="p">[</span><span class="s1">&#39;format&#39;</span><span class="p">]</span>
+                    <span class="ow">and</span> <span class="s1">&#39;title&#39;</span> <span class="ow">in</span> <span class="n">probe_info</span><span class="p">[</span><span class="s1">&#39;format&#39;</span><span class="p">][</span><span class="s1">&#39;tags&#39;</span><span class="p">]):</span>
+                <span class="n">labels</span><span class="o">.</span><span class="n">title</span> <span class="o">=</span> <span class="n">probe_info</span><span class="p">[</span><span class="s1">&#39;format&#39;</span><span class="p">][</span><span class="s1">&#39;tags&#39;</span><span class="p">][</span><span class="s1">&#39;title&#39;</span><span class="p">]</span>
+            <span class="k">if</span> <span class="s1">&#39;size&#39;</span> <span class="ow">in</span> <span class="n">probe_info</span><span class="p">[</span><span class="s1">&#39;format&#39;</span><span class="p">]:</span>
+                <span class="n">file_bytes</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">probe_info</span><span class="p">[</span><span class="s1">&#39;format&#39;</span><span class="p">][</span><span class="s1">&#39;size&#39;</span><span class="p">])</span>
+                <span class="n">labels</span><span class="o">.</span><span class="n">size</span> <span class="o">=</span> <span class="nb">round</span><span class="p">(</span><span class="n">bitmath</span><span class="o">.</span><span class="n">MiB</span><span class="p">(</span><span class="nb">bytes</span><span class="o">=</span><span class="n">file_bytes</span><span class="p">)</span><span class="o">.</span><span class="n">value</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+            <span class="k">if</span> <span class="s1">&#39;bit_rate&#39;</span> <span class="ow">in</span> <span class="n">probe_info</span><span class="p">[</span><span class="s1">&#39;format&#39;</span><span class="p">]:</span>
+                <span class="n">bits</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">probe_info</span><span class="p">[</span><span class="s1">&#39;format&#39;</span><span class="p">][</span><span class="s1">&#39;bit_rate&#39;</span><span class="p">])</span>
+                <span class="n">labels</span><span class="o">.</span><span class="n">bitrate</span> <span class="o">=</span> <span class="nb">round</span><span class="p">(</span><span class="n">bitmath</span><span class="o">.</span><span class="n">Mib</span><span class="p">(</span><span class="n">bits</span><span class="o">=</span><span class="n">bits</span><span class="p">)</span><span class="o">.</span><span class="n">value</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+            <span class="k">if</span> <span class="s1">&#39;format_name&#39;</span> <span class="ow">in</span> <span class="n">probe_info</span><span class="p">[</span><span class="s1">&#39;format&#39;</span><span class="p">]:</span>
+                <span class="n">labels</span><span class="o">.</span><span class="n">container_format</span> <span class="o">=</span> <span class="n">probe_info</span><span class="p">[</span><span class="s1">&#39;format&#39;</span><span class="p">][</span><span class="s1">&#39;format_name&#39;</span><span class="p">]</span>
+
+        <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span><span class="n">file_name</span><span class="p">,</span> <span class="n">duration</span><span class="p">,</span> <span class="n">streams</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="n">labels</span><span class="p">)</span></div>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">streams_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;:obj:`dict` of {:obj:`int`: :obj:`Stream`}: The :obj:`Stream`</span>
+<span class="sd">        instances in :obj:`Container.streams` keyed by their indexes.&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="p">{</span><span class="n">stream</span><span class="o">.</span><span class="n">index</span><span class="p">:</span> <span class="n">stream</span> <span class="k">for</span> <span class="n">stream</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">streams</span><span class="p">}</span>
+
+<div class="viewcode-block" id="Container.acceptable_streams"><a class="viewcode-back" href="../index.html#models.Container.acceptable_streams">[docs]</a>    <span class="k">def</span> <span class="nf">acceptable_streams</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">index_list</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Determine if all of the indexes in a list match a :obj:`Stream` in</span>
+<span class="sd">        :obj:`self.streams`.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            index_list (:obj:`list` of :obj:`int`): Indexes that may correspond</span>
+<span class="sd">                to :obj:`Stream` instances.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            :obj:`bool`: True if all of the indexes are valid.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            :obj:`StreamSelectionError`: If list contains an index that does</span>
+<span class="sd">                not correspond to any :obj:`Stream` in :obj:`self.streams`.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">streams</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">streams_dict</span>
+        <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="n">index_list</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">index</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">streams</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;This contaner does not contain a stream &#39;</span>
+                                 <span class="s1">&#39;with index </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">index</span><span class="p">))</span>
+            <span class="k">if</span> <span class="n">streams</span><span class="p">[</span><span class="n">index</span><span class="p">]</span><span class="o">.</span><span class="n">type</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;audio&#39;</span><span class="p">,</span> <span class="s1">&#39;video&#39;</span><span class="p">,</span> <span class="s1">&#39;subtitle&#39;</span><span class="p">]:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;filmalize cannot output streams of type </span><span class="si">{}</span><span class="s1">&#39;</span>
+                                 <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">streams</span><span class="p">[</span><span class="n">index</span><span class="p">]</span><span class="o">.</span><span class="n">type</span><span class="p">))</span>
+        <span class="k">return</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="Container.default_streams"><a class="viewcode-back" href="../index.html#models.Container.default_streams">[docs]</a>    <span class="k">def</span> <span class="nf">default_streams</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Return a :obj:`list` of :obj:`int` the indexes of the first video</span>
+<span class="sd">        and audio stream.&quot;&quot;&quot;</span>
+
+        <span class="n">streams</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">audio</span><span class="p">,</span> <span class="n">video</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="k">for</span> <span class="n">stream</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">streams</span><span class="p">:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">audio</span> <span class="ow">and</span> <span class="n">stream</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s1">&#39;audio&#39;</span><span class="p">:</span>
+                <span class="n">audio</span> <span class="o">=</span> <span class="kc">True</span>
+                <span class="n">streams</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">stream</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="ow">not</span> <span class="n">video</span> <span class="ow">and</span> <span class="n">stream</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s1">&#39;video&#39;</span><span class="p">:</span>
+                <span class="n">video</span> <span class="o">=</span> <span class="kc">True</span>
+                <span class="n">streams</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">stream</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">streams</span></div>
+
+<div class="viewcode-block" id="Container.default_name"><a class="viewcode-back" href="../index.html#models.Container.default_name">[docs]</a>    <span class="k">def</span> <span class="nf">default_name</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Return :obj:`self.file_name` reformatted with the proper extension</span>
+<span class="sd">        for the output format.&quot;&quot;&quot;</span>
+
+        <span class="k">return</span> <span class="n">PurePath</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">file_name</span><span class="p">)</span><span class="o">.</span><span class="n">stem</span> <span class="o">+</span> <span class="n">defaults</span><span class="o">.</span><span class="n">ENDING</span></div>
+
+<div class="viewcode-block" id="Container.add_subtitle_file"><a class="viewcode-back" href="../index.html#models.Container.add_subtitle_file">[docs]</a>    <span class="k">def</span> <span class="nf">add_subtitle_file</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_name</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Add an external subtitle file. Allow the user to set a custom</span>
+<span class="sd">        encoding.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            file_name (:obj:`str`): The name of the subtitle file.</span>
+<span class="sd">            encoding (:obj:`str`, optional): The encoding of the subtitle file.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">subtitle_files</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">SubtitleFile</span><span class="p">(</span><span class="n">file_name</span><span class="p">,</span> <span class="n">encoding</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="Container.convert"><a class="viewcode-back" href="../index.html#models.Container.convert">[docs]</a>    <span class="k">def</span> <span class="nf">convert</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Start the conversion of this container in a subprocess.&quot;&quot;&quot;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">process</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">Popen</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">build_command</span><span class="p">(),</span>
+            <span class="n">stderr</span><span class="o">=</span><span class="n">subprocess</span><span class="o">.</span><span class="n">PIPE</span><span class="p">,</span>
+            <span class="n">universal_newlines</span><span class="o">=</span><span class="kc">True</span>
+        <span class="p">)</span></div>
+
+<div class="viewcode-block" id="Container.build_command"><a class="viewcode-back" href="../index.html#models.Container.build_command">[docs]</a>    <span class="k">def</span> <span class="nf">build_command</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Build the ffmpeg command to process this container.</span>
+
+<span class="sd">        Generate appropriate ffmpeg options to process the streams selected in</span>
+<span class="sd">        :obj:`self.selected`.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            :obj:`list` of :obj:`str`: The ffmpeg command and options to</span>
+<span class="sd">                execute.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">command</span> <span class="o">=</span> <span class="p">[</span><span class="n">defaults</span><span class="o">.</span><span class="n">FFMPEG</span><span class="p">,</span> <span class="s1">&#39;-nostdin&#39;</span><span class="p">,</span> <span class="s1">&#39;-progress&#39;</span><span class="p">,</span>
+                   <span class="bp">self</span><span class="o">.</span><span class="n">temp_file</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="s1">&#39;-v&#39;</span><span class="p">,</span> <span class="s1">&#39;error&#39;</span><span class="p">,</span> <span class="s1">&#39;-y&#39;</span><span class="p">,</span> <span class="s1">&#39;-i&#39;</span><span class="p">,</span>
+                   <span class="bp">self</span><span class="o">.</span><span class="n">file_name</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">subtitle</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">subtitle_files</span><span class="p">:</span>
+            <span class="n">command</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-sub_charenc&#39;</span><span class="p">,</span> <span class="n">subtitle</span><span class="o">.</span><span class="n">encoding</span><span class="p">,</span> <span class="s1">&#39;-i&#39;</span><span class="p">,</span>
+                            <span class="n">subtitle</span><span class="o">.</span><span class="n">file_name</span><span class="p">])</span>
+        <span class="k">for</span> <span class="n">stream</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">selected</span><span class="p">:</span>
+            <span class="n">command</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-map&#39;</span><span class="p">,</span> <span class="s1">&#39;0:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">stream</span><span class="p">)])</span>
+        <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">subtitle_files</span><span class="p">):</span>
+            <span class="n">command</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-map&#39;</span><span class="p">,</span> <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">:0&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">index</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)])</span>
+        <span class="n">stream_number</span> <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;video&#39;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s1">&#39;audio&#39;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s1">&#39;subtitle&#39;</span><span class="p">:</span> <span class="mi">0</span><span class="p">}</span>
+        <span class="n">output_streams</span> <span class="o">=</span> <span class="p">[</span><span class="n">s</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">streams</span> <span class="k">if</span> <span class="n">s</span><span class="o">.</span><span class="n">index</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">selected</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">stream</span> <span class="ow">in</span> <span class="n">output_streams</span><span class="p">:</span>
+            <span class="n">command</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">stream</span><span class="o">.</span><span class="n">build_options</span><span class="p">(</span><span class="n">stream_number</span><span class="p">[</span><span class="n">stream</span><span class="o">.</span><span class="n">type</span><span class="p">]))</span>
+            <span class="n">stream_number</span><span class="p">[</span><span class="n">stream</span><span class="o">.</span><span class="n">type</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="k">for</span> <span class="n">subtitle</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">subtitle_files</span><span class="p">:</span>
+            <span class="n">command</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-c:s:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">stream_number</span><span class="p">[</span><span class="s1">&#39;subtitle&#39;</span><span class="p">])])</span>
+            <span class="n">command</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">subtitle</span><span class="o">.</span><span class="n">options</span><span class="p">)</span>
+            <span class="n">stream_number</span><span class="p">[</span><span class="s1">&#39;subtitle&#39;</span><span class="p">]</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="n">command</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">file_name</span><span class="p">),</span>
+                                     <span class="bp">self</span><span class="o">.</span><span class="n">output_name</span><span class="p">)])</span>
+
+        <span class="k">return</span> <span class="n">command</span></div></div>
+
+
+<div class="viewcode-block" id="StreamLabel"><a class="viewcode-back" href="../index.html#models.StreamLabel">[docs]</a><span class="k">class</span> <span class="nc">StreamLabel</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Labels for :obj:`Stream` objects.</span>
+
+<span class="sd">    Note:</span>
+<span class="sd">        The information stored here is simply for display and (with one</span>
+<span class="sd">        exception) will not affect the output file.</span>
+
+<span class="sd">        For audio streams, if this stream cannot be copied and must be</span>
+<span class="sd">        transcoded, and if there is a value stored in self.bitrate, that</span>
+<span class="sd">        value will be chosen by default as the output stream target</span>
+<span class="sd">        bitrate.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        title (:obj:`str`): Stream title.</span>
+<span class="sd">        bitrate (:obj:`float`): Stream bitrate in Mib/s for video streams or</span>
+<span class="sd">            Kib/s for audio streams.</span>
+<span class="sd">        resolution (:obj:`str`): Stream resolution.</span>
+<span class="sd">        language (:obj:`str`): Language name or abbreviation.</span>
+<span class="sd">        channels (:obj:`str`): Audio channel information (stereo, 5.1, etc.).</span>
+<span class="sd">        default (:obj:`bool`): True if this stream is the default stream of its</span>
+<span class="sd">            type, else False.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        title (:obj:`str`): Stream title.</span>
+<span class="sd">        bitrate (:obj:`float`): Stream bitrate in Mib/s for video streams or</span>
+<span class="sd">            Kib/s for audio streams.</span>
+<span class="sd">        resolution (:obj:`str`): Stream resolution.</span>
+<span class="sd">        language (:obj:`str`): Language name or abbreviation.</span>
+<span class="sd">        channels (:obj:`str`): Audio channel information (stereo, 5.1, etc.).</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">bitrate</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">resolution</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">language</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">channels</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">title</span> <span class="o">=</span> <span class="n">title</span> <span class="k">if</span> <span class="n">title</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bitrate</span> <span class="o">=</span> <span class="n">bitrate</span> <span class="k">if</span> <span class="n">bitrate</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">resolution</span> <span class="o">=</span> <span class="n">resolution</span> <span class="k">if</span> <span class="n">resolution</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">language</span> <span class="o">=</span> <span class="n">language</span> <span class="k">if</span> <span class="n">language</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">channels</span> <span class="o">=</span> <span class="n">channels</span> <span class="k">if</span> <span class="n">channels</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_default</span> <span class="o">=</span> <span class="s1">&#39;default&#39;</span> <span class="k">if</span> <span class="n">default</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">default</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;:obj:`str`: &#39;default&#39; if this stream is the default stream of its</span>
+<span class="sd">        type, else &#39;&#39;.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            is_default (bool): True if this stream is the default stream of its</span>
+<span class="sd">                type, else False.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_default</span>
+
+    <span class="nd">@default</span><span class="o">.</span><span class="n">setter</span>
+    <span class="k">def</span> <span class="nf">default</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">is_default</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_default</span> <span class="o">=</span> <span class="s1">&#39;default&#39;</span> <span class="k">if</span> <span class="n">is_default</span> <span class="k">else</span> <span class="s1">&#39;&#39;</span></div>
+
+
+<div class="viewcode-block" id="Stream"><a class="viewcode-back" href="../index.html#models.Stream">[docs]</a><span class="k">class</span> <span class="nc">Stream</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Multimedia stream object.</span>
+
+<span class="sd">    Note:</span>
+<span class="sd">        At this time, :obj:`Stream` instances will only be included in the</span>
+<span class="sd">        output file if they have type of &#39;audio&#39;, &#39;video&#39;, or &#39;subtitle&#39;.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        index (:obj:`int`): The stream index.</span>
+<span class="sd">        stream_type (:obj:`str`): The multimedia type of the stream as reported</span>
+<span class="sd">            by ffprobe.</span>
+<span class="sd">        codec (:obj:`str`): The codec with which the stream is encoded as</span>
+<span class="sd">            as reported by ffprobe.</span>
+<span class="sd">        custom_crf (:obj:`int`, optional): Video stream Constant Rate Factor.</span>
+<span class="sd">            If specified, this stream will be transcoded using this crf even</span>
+<span class="sd">            if the input stream is suitable for copying to the output file.</span>
+<span class="sd">        custom_bitrate (:obj:`float`, optional): Audio stream ouput bitrate in</span>
+<span class="sd">            Kib/s. If specified, this audio stream will be transcoded using</span>
+<span class="sd">            this as the target bitrate even if the input stream is suitable for</span>
+<span class="sd">            copying and even if there is a bitrate set in the</span>
+<span class="sd">            :obj:`StreamLabel`.</span>
+<span class="sd">        labels (:obj:`StreamLabel`, optional): Informational metadata about the</span>
+<span class="sd">            input stream.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        index (:obj:`int`): The stream index.</span>
+<span class="sd">        stream_type (:obj:`str`): The multimedia type of the stream as reported</span>
+<span class="sd">            by ffprobe.</span>
+<span class="sd">        codec (:obj:`str`): The codec with which the stream is encoded as</span>
+<span class="sd">            as reported by ffprobe.</span>
+<span class="sd">        custom_crf (:obj:`int`): Video stream Constant Rate Factor.</span>
+<span class="sd">            If set, this stream will be transcoded using this crf even</span>
+<span class="sd">            if the input stream is suitable for copying to the output file.</span>
+<span class="sd">        custom_bitrate (:obj:`float`): Audio stream ouput bitrate in Kib/s. If</span>
+<span class="sd">            set, this audio stream will be transcoded using this as</span>
+<span class="sd">            the target bitrate even if the input stream is suitable for</span>
+<span class="sd">            copying and even if there is a bitrate set in the</span>
+<span class="sd">            :obj:`StreamLabel`.</span>
+<span class="sd">        labels (:obj:`StreamLabel`): Informational metadata about the</span>
+<span class="sd">            input stream.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="p">,</span> <span class="n">stream_type</span><span class="p">,</span> <span class="n">codec</span><span class="p">,</span> <span class="n">custom_crf</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                 <span class="n">custom_bitrate</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="n">index</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">type</span> <span class="o">=</span> <span class="n">stream_type</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">codec</span> <span class="o">=</span> <span class="n">codec</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">custom_crf</span> <span class="o">=</span> <span class="n">custom_crf</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">custom_bitrate</span> <span class="o">=</span> <span class="n">custom_bitrate</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">labels</span> <span class="o">=</span> <span class="n">labels</span> <span class="k">if</span> <span class="n">labels</span> <span class="k">else</span> <span class="n">StreamLabel</span><span class="p">()</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">option_summary</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="nd">@classmethod</span>
+<div class="viewcode-block" id="Stream.from_dict"><a class="viewcode-back" href="../index.html#models.Stream.from_dict">[docs]</a>    <span class="k">def</span> <span class="nf">from_dict</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">stream_info</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Build a :obj:`Stream` instance from a dictionary.</span>
+
+<span class="sd">            Args:</span>
+<span class="sd">                stream_info (:obj:`dict`): Stream information in dictionary</span>
+<span class="sd">                    format structured in the manner of ffprobe json output.</span>
+
+<span class="sd">            Returns:</span>
+<span class="sd">                :obj:`Stream`: Instance populated with data from the given</span>
+<span class="sd">                    dictionary.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">index</span> <span class="o">=</span> <span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;index&#39;</span><span class="p">]</span>
+        <span class="n">stream_type</span> <span class="o">=</span> <span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;codec_type&#39;</span><span class="p">]</span>
+        <span class="n">codec</span> <span class="o">=</span> <span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;codec_name&#39;</span><span class="p">]</span>
+
+        <span class="n">labels</span> <span class="o">=</span> <span class="n">StreamLabel</span><span class="p">()</span>
+        <span class="k">if</span> <span class="s1">&#39;tags&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span> <span class="ow">and</span> <span class="s1">&#39;language&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;tags&#39;</span><span class="p">]:</span>
+            <span class="n">labels</span><span class="o">.</span><span class="n">language</span> <span class="o">=</span> <span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;tags&#39;</span><span class="p">][</span><span class="s1">&#39;language&#39;</span><span class="p">]</span>
+        <span class="k">if</span> <span class="p">(</span><span class="s1">&#39;disposition&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span>
+                <span class="ow">and</span> <span class="s1">&#39;default&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;disposition&#39;</span><span class="p">]):</span>
+            <span class="n">labels</span><span class="o">.</span><span class="n">default</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;disposition&#39;</span><span class="p">][</span><span class="s1">&#39;default&#39;</span><span class="p">])</span>
+        <span class="k">if</span> <span class="s1">&#39;tags&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span> <span class="ow">and</span> <span class="s1">&#39;title&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;tags&#39;</span><span class="p">]:</span>
+            <span class="n">labels</span><span class="o">.</span><span class="n">title</span> <span class="o">=</span> <span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;tags&#39;</span><span class="p">][</span><span class="s1">&#39;title&#39;</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="n">stream_type</span> <span class="o">==</span> <span class="s1">&#39;video&#39;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="s1">&#39;height&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span> <span class="ow">and</span> <span class="s1">&#39;width&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span><span class="p">:</span>
+                <span class="n">width</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;width&#39;</span><span class="p">])</span>
+                <span class="n">height</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;height&#39;</span><span class="p">])</span>
+                <span class="n">labels</span><span class="o">.</span><span class="n">resolution</span> <span class="o">=</span> <span class="n">width</span> <span class="o">+</span> <span class="s1">&#39;x&#39;</span> <span class="o">+</span> <span class="n">height</span>
+            <span class="k">elif</span> <span class="p">(</span><span class="s1">&#39;coded_height&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span>
+                  <span class="ow">and</span> <span class="s1">&#39;coded_width&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span><span class="p">):</span>
+                <span class="n">width</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;coded_width&#39;</span><span class="p">])</span>
+                <span class="n">height</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;coded_height&#39;</span><span class="p">])</span>
+                <span class="n">labels</span><span class="o">.</span><span class="n">resolution</span> <span class="o">=</span> <span class="n">width</span> <span class="o">+</span> <span class="s1">&#39;x&#39;</span> <span class="o">+</span> <span class="n">height</span>
+            <span class="k">if</span> <span class="s1">&#39;bit_rate&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span><span class="p">:</span>
+                <span class="n">bits</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;bit_rate&#39;</span><span class="p">])</span>
+                <span class="n">labels</span><span class="o">.</span><span class="n">bitrate</span> <span class="o">=</span> <span class="nb">round</span><span class="p">(</span><span class="n">bitmath</span><span class="o">.</span><span class="n">Mib</span><span class="p">(</span><span class="n">bits</span><span class="o">=</span><span class="n">bits</span><span class="p">)</span><span class="o">.</span><span class="n">value</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+            <span class="k">if</span> <span class="s1">&#39;field_order&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span><span class="p">:</span>
+                <span class="n">labels</span><span class="o">.</span><span class="n">bitrate</span> <span class="o">=</span> <span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;field_order&#39;</span><span class="p">]</span>
+        <span class="k">elif</span> <span class="n">stream_type</span> <span class="o">==</span> <span class="s1">&#39;audio&#39;</span><span class="p">:</span>
+            <span class="k">if</span> <span class="s1">&#39;channel_layout&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span><span class="p">:</span>
+                <span class="n">labels</span><span class="o">.</span><span class="n">channels</span> <span class="o">=</span> <span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;channel_layout&#39;</span><span class="p">]</span>
+            <span class="k">if</span> <span class="s1">&#39;bit_rate&#39;</span> <span class="ow">in</span> <span class="n">stream_info</span><span class="p">:</span>
+                <span class="n">bits</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">stream_info</span><span class="p">[</span><span class="s1">&#39;bit_rate&#39;</span><span class="p">])</span>
+                <span class="n">labels</span><span class="o">.</span><span class="n">bitrate</span> <span class="o">=</span> <span class="nb">round</span><span class="p">(</span><span class="n">bitmath</span><span class="o">.</span><span class="n">Kib</span><span class="p">(</span><span class="n">bits</span><span class="o">=</span><span class="n">bits</span><span class="p">)</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">cls</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">stream_type</span><span class="p">,</span> <span class="n">codec</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="n">labels</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="Stream.build_options"><a class="viewcode-back" href="../index.html#models.Stream.build_options">[docs]</a>    <span class="k">def</span> <span class="nf">build_options</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">number</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Generate ffmpeg codec/bitrate options for this :obj:`Stream`.</span>
+
+<span class="sd">        The options generated will use custom values for video CRF or audio</span>
+<span class="sd">        bitrate, if specified, or the default values. The option_summary is</span>
+<span class="sd">        updated to reflect the selected options.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            number (:obj:`int`, optional): The number of Streams of this type</span>
+<span class="sd">                that have been added to the command.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            :obj:`list` of :obj:`str`: The ffmpeg options for this Stream.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">options</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s1">&#39;video&#39;</span><span class="p">:</span>
+            <span class="n">options</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-c:v:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">number</span><span class="p">)])</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">custom_crf</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">codec</span> <span class="o">!=</span> <span class="n">defaults</span><span class="o">.</span><span class="n">C_VIDEO</span><span class="p">:</span>
+                <span class="n">crf</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">custom_crf</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">custom_crf</span>
+                       <span class="k">else</span> <span class="n">defaults</span><span class="o">.</span><span class="n">CRF</span><span class="p">)</span>
+                <span class="n">options</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;libx264&#39;</span><span class="p">,</span> <span class="s1">&#39;-preset&#39;</span><span class="p">,</span> <span class="s1">&#39;slow&#39;</span><span class="p">,</span> <span class="s1">&#39;-crf&#39;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">crf</span><span class="p">),</span>
+                                <span class="s1">&#39;-pix_fmt&#39;</span><span class="p">,</span> <span class="s1">&#39;yuv420p&#39;</span><span class="p">])</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">option_summary</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;transcode -&gt; </span><span class="si">{}</span><span class="s1">, crf=</span><span class="si">{}</span><span class="s1">&#39;</span>
+                                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">defaults</span><span class="o">.</span><span class="n">C_VIDEO</span><span class="p">,</span> <span class="n">crf</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">options</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;copy&#39;</span><span class="p">])</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">option_summary</span> <span class="o">=</span> <span class="s1">&#39;copy&#39;</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s1">&#39;audio&#39;</span><span class="p">:</span>
+            <span class="n">options</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-c:a:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">number</span><span class="p">)])</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">custom_bitrate</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">codec</span> <span class="o">!=</span> <span class="n">defaults</span><span class="o">.</span><span class="n">C_AUDIO</span><span class="p">:</span>
+                <span class="n">bitrate</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">custom_bitrate</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">custom_bitrate</span>
+                           <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">labels</span><span class="o">.</span><span class="n">bitrate</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">labels</span><span class="o">.</span><span class="n">bitrate</span>
+                           <span class="k">else</span> <span class="n">defaults</span><span class="o">.</span><span class="n">BITRATE</span><span class="p">)</span>
+                <span class="n">options</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="n">defaults</span><span class="o">.</span><span class="n">C_AUDIO</span><span class="p">,</span> <span class="s1">&#39;-b:a:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">number</span><span class="p">),</span>
+                                <span class="s1">&#39;</span><span class="si">{}</span><span class="s1">k&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">bitrate</span><span class="p">)])</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">option_summary</span> <span class="o">=</span> <span class="p">(</span><span class="s1">&#39;transcode -&gt; </span><span class="si">{}</span><span class="s1">, bitrate=</span><span class="si">{}</span><span class="s1">Kib/s&#39;</span>
+                                       <span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">defaults</span><span class="o">.</span><span class="n">C_AUDIO</span><span class="p">,</span> <span class="n">bitrate</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">options</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;copy&#39;</span><span class="p">])</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">option_summary</span> <span class="o">=</span> <span class="s1">&#39;copy&#39;</span>
+        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s1">&#39;subtitle&#39;</span><span class="p">:</span>
+            <span class="n">options</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="s1">&#39;-c:s:</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">number</span><span class="p">),</span> <span class="n">defaults</span><span class="o">.</span><span class="n">C_SUBS</span><span class="p">])</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">option_summary</span> <span class="o">=</span> <span class="s1">&#39;transcode -&gt; </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">defaults</span><span class="o">.</span><span class="n">C_SUBS</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">options</span></div></div>
+
+
+<div class="viewcode-block" id="SubtitleFile"><a class="viewcode-back" href="../index.html#models.SubtitleFile">[docs]</a><span class="k">class</span> <span class="nc">SubtitleFile</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;Subtitle file object.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        file_name (:obj:`str`): The subtitle file to represent.</span>
+<span class="sd">        encoding (:obj:`str`, optional): The file encoding of the subtitle</span>
+<span class="sd">            file.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        file_name (:obj:`str`): The subtitle file represented.</span>
+<span class="sd">        encoding (:obj:`str`): The file encoding of the subtitle file.</span>
+
+
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">file_name</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">file_name</span> <span class="o">=</span> <span class="n">file_name</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">encoding</span> <span class="o">=</span> <span class="n">encoding</span> <span class="k">if</span> <span class="n">encoding</span> <span class="k">else</span> <span class="bp">self</span><span class="o">.</span><span class="n">guess_encoding</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">options</span> <span class="o">=</span> <span class="p">[</span><span class="n">defaults</span><span class="o">.</span><span class="n">C_SUBS</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">option_summary</span> <span class="o">=</span> <span class="s1">&#39;transcode -&gt; </span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">defaults</span><span class="o">.</span><span class="n">C_SUBS</span><span class="p">)</span>
+
+<div class="viewcode-block" id="SubtitleFile.guess_encoding"><a class="viewcode-back" href="../index.html#models.SubtitleFile.guess_encoding">[docs]</a>    <span class="k">def</span> <span class="nf">guess_encoding</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot;Guess the encoding of the subtitle file.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            str: The best guess for the subtitle file encoding.</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">file_name</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;rb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">_file</span><span class="p">:</span>
+            <span class="n">line</span> <span class="o">=</span> <span class="n">_file</span><span class="o">.</span><span class="n">readline</span><span class="p">()</span>
+        <span class="n">detected</span> <span class="o">=</span> <span class="n">chardet</span><span class="o">.</span><span class="n">detect</span><span class="p">(</span><span class="n">line</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">detected</span><span class="p">[</span><span class="s1">&#39;encoding&#39;</span><span class="p">]</span></div></div>
+</pre></div>
+
+           </div>
+           <div class="articleComments">
+            
+           </div>
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2017, Will Timpson.
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/snide/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  
+
+    <script type="text/javascript">
+        var DOCUMENTATION_OPTIONS = {
+            URL_ROOT:'../',
+            VERSION:'',
+            COLLAPSE_INDEX:false,
+            FILE_SUFFIX:'.html',
+            HAS_SOURCE:  true,
+            SOURCELINK_SUFFIX: '.txt'
+        };
+    </script>
+      <script type="text/javascript" src="../_static/jquery.js"></script>
+      <script type="text/javascript" src="../_static/underscore.js"></script>
+      <script type="text/javascript" src="../_static/doctools.js"></script>
+
+  
+
+  
+  
+    <script type="text/javascript" src="../_static/js/theme.js"></script>
+  
+
+  
+  
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.StickyNav.enable();
+      });
+  </script>
+   
+
+</body>
+</html>
