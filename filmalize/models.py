@@ -61,8 +61,9 @@ class Container(object):
                 include in the output file. If not specified, the first audio
                 and video stream will be selected.
             output_name (str, optional): Output filename. If not specified, the
-                output filename will be set to the input file, but with '.mp4'
-                replacing the extension.
+                output filename will be set to be the same as the input file,
+                but with the extension replaced with the proper one for the
+                output format.
             labels (ContainerLabel, optional): Informational metadata about the
                 input file.
 
@@ -102,7 +103,7 @@ class Container(object):
         """
 
         probe_response = subprocess.run(
-            ['/usr/bin/ffprobe', '-v', 'error', '-show_format',
+            [defaults.FFPROBE, '-v', 'error', '-show_format',
              '-show_streams', '-of', 'json', file_name],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
@@ -177,9 +178,10 @@ class Container(object):
         return streams
 
     def default_name(self):
-        """Return a string; self.file_name with a '.mp4' ending."""
+        """Return a string; self.file_name with the proper extension for the
+        output format."""
 
-        return PurePath(self.file_name).stem + '.mp4'
+        return PurePath(self.file_name).stem + defaults.ENDING
 
     def add_subtitle_file(self, file_name, encoding=None):
         """Add an external subtitle file. Allow the user to set a custom
@@ -212,7 +214,7 @@ class Container(object):
 
         """
 
-        command = ['/usr/bin/ffmpeg', '-nostdin', '-progress',
+        command = [defaults.FFMPEG, '-nostdin', '-progress',
                    self.temp_file.name, '-v', 'error', '-y', '-i',
                    self.file_name]
         for subtitle in self.subtitle_files:
@@ -394,31 +396,32 @@ class Stream(object):
         options = []
         if self.type == 'video':
             options.extend(['-c:v:{}'.format(number)])
-            if self.custom_crf or self.codec != 'h264':
+            if self.custom_crf or self.codec != defaults.C_VIDEO:
                 crf = (self.custom_crf if self.custom_crf
                        else defaults.CRF)
                 options.extend(['libx264', '-preset', 'slow', '-crf', str(crf),
                                 '-pix_fmt', 'yuv420p'])
-                self.option_summary = ('transcode -> h264, crf={}'.format(crf))
+                self.option_summary = ('transcode -> {}, crf={}'
+                                       .format(defaults.C_VIDEO, crf))
             else:
                 options.extend(['copy'])
                 self.option_summary = 'copy'
         elif self.type == 'audio':
             options.extend(['-c:a:{}'.format(number)])
-            if self.custom_bitrate or self.codec != 'aac':
+            if self.custom_bitrate or self.codec != defaults.C_AUDIO:
                 bitrate = (self.custom_bitrate if self.custom_bitrate
                            else self.labels.bitrate if self.labels.bitrate
                            else defaults.BITRATE)
-                options.extend(['aac', '-b:a:{}'.format(number),
+                options.extend([defaults.C_AUDIO, '-b:a:{}'.format(number),
                                 '{}k'.format(bitrate)])
-                self.option_summary = ('transcode -> aac, '
-                                       'bitrate={}Kib/s').format(bitrate)
+                self.option_summary = ('transcode -> {}, bitrate={}Kib/s'
+                                       .format(defaults.C_AUDIO, bitrate))
             else:
                 options.extend(['copy'])
                 self.option_summary = 'copy'
         elif self.type == 'subtitle':
-            options.extend(['-c:s:{}'.format(number), 'mov_text'])
-            self.option_summary = 'transcode -> mov_text'
+            options.extend(['-c:s:{}'.format(number), defaults.C_SUBS])
+            self.option_summary = 'transcode -> {}'.format(defaults.C_SUBS)
 
         return options
 
@@ -436,8 +439,8 @@ class SubtitleFile(object):
         """
         self.file_name = file_name
         self.encoding = encoding if encoding else self.guess_encoding()
-        self.options = ['mov_text']
-        self.option_summary = 'transcode -> mov_text'
+        self.options = [defaults.C_SUBS]
+        self.option_summary = 'transcode -> {}'.format(defaults.C_SUBS)
 
     def guess_encoding(self):
         """Guess the encoding of the subtitle file.

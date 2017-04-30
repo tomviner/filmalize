@@ -465,12 +465,12 @@ def change_file_name(container):
 
     """
 
-    default = PurePath(container.file_name).stem + '.mp4'
+    default = PurePath(container.file_name).stem + defaults.ENDING
     try:
         if yes_no('Use default file name ({})?'.format(default)):
             container.output_name = default
         else:
             name = click.prompt('Enter output file name (without extension)')
-            container.output_name = name + '.mp4'
+            container.output_name = name + defaults.ENDING
     except click.exceptions.Abort:
         raise UserCancelError('Cancelled editing file name.')
