@@ -4,9 +4,11 @@ Welcome to filmalize!
 .. toctree::
    :maxdepth: 2
 
+   quickstart
+   api
+
 .. include:: ../../README.rst
 
-.. include:: ./api.rst
 
 Indices and tables
 ==================
