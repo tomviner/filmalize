@@ -1,5 +1,5 @@
-Introduction
-------------
+filmalize
+---------
 
 Named a `portmanteau word`_ composed of *film* and *standardize*,
 filmalize is a tool for standardizing a video library. filmalize is

@@ -30,12 +30,10 @@ class SelectedStreams(click.ParamType):
                       'single space')
 
         try:
-            self.container.acceptable_streams(selected)
+            if self.container.acceptable_streams(selected):
+                return selected
         except ValueError as _e:
             self.fail(_e)
-
-        else:
-            return selected
 
 
 def main_menu(containers):

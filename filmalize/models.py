@@ -18,7 +18,7 @@ import chardet
 import bitmath
 
 import filmalize.defaults as defaults
-from filmalize.errors import ProbeError
+from filmalize.errors import ProbeError, ProgressFinishedError, NoProgressError
 
 
 class ContainerLabel(object):
@@ -91,8 +91,6 @@ class Container(object):
             timedelta.
         temp_file (:obj:`tempfile.NamedTemporaryFile`): The temporary file for
             ffmpeg to write status information to.
-        progress (:obj:`int`): The number of microseconds that ffmpeg has
-            processed.
         process (:obj:`subprocess.Popen`): The subprocess in which ffmpeg
             processes the file.
 
@@ -105,14 +103,13 @@ class Container(object):
         self.duration = duration
         self.streams = streams
         self.subtitle_files = subtitle_files if subtitle_files else []
-        self.output_name = output_name if output_name else self.default_name()
-        self.selected = selected if selected else self.default_streams()
+        self.output_name = output_name if output_name else self.default_name
+        self.selected = selected if selected else self.default_streams
         self.labels = labels if labels else ContainerLabel()
 
         self.microseconds = int(duration * 1000000)
         self.length = datetime.timedelta(seconds=round(duration, 0))
         self.temp_file = tempfile.NamedTemporaryFile()
-        self.progress = 0
         self.process = None
 
     @classmethod
@@ -166,41 +163,16 @@ class Container(object):
         return cls(file_name, duration, streams, labels=labels)
 
     @property
-    def streams_dict(self):
-        """:obj:`dict` of {:obj:`int`: :obj:`Stream`}: The :obj:`Stream`
-        instances in :obj:`Container.streams` keyed by their indexes."""
-        return {stream.index: stream for stream in self.streams}
+    def default_name(self):
+        """:obj:`str`: The input filename reformatted with the selected output
+        file extension."""
 
-    def acceptable_streams(self, index_list):
-        """Determine if all of the indexes in a list match a :obj:`Stream` in
-        :obj:`self.streams`.
+        return PurePath(self.file_name).stem + defaults.ENDING
 
-        Args:
-            index_list (:obj:`list` of :obj:`int`): Indexes that may correspond
-                to :obj:`Stream` instances.
-
-        Returns:
-            :obj:`bool`: True if all of the indexes are valid.
-
-        Raises:
-            :obj:`StreamSelectionError`: If list contains an index that does
-                not correspond to any :obj:`Stream` in :obj:`self.streams`.
-
-        """
-
-        streams = self.streams_dict
-        for index in index_list:
-            if index not in streams.keys():
-                raise ValueError('This contaner does not contain a stream '
-                                 'with index {}'.format(index))
-            if streams[index].type not in ['audio', 'video', 'subtitle']:
-                raise ValueError('filmalize cannot output streams of type {}'
-                                 .format(streams[index].type))
-        return True
-
+    @property
     def default_streams(self):
-        """Return a :obj:`list` of :obj:`int` the indexes of the first video
-        and audio stream."""
+        """:obj:`list` of :obj:`int`: The indexes of the first video and audio
+        :obj:`Stream`."""
 
         streams = []
         audio, video = None, None
@@ -214,14 +186,74 @@ class Container(object):
 
         return streams
 
-    def default_name(self):
-        """Return :obj:`self.file_name` reformatted with the proper extension
-        for the output format."""
+    @property
+    def streams_dict(self):
+        """:obj:`dict` of {:obj:`int`: :obj:`Stream`}: The :obj:`Stream`
+        instances in :obj:`Container.streams` keyed by their indexes."""
+        return {stream.index: stream for stream in self.streams}
 
-        return PurePath(self.file_name).stem + defaults.ENDING
+    @property
+    def progress(self):
+        """:obj:`int`: The number of microseconds that ffmpeg has processed.
+
+        Raises:
+            :obj:`ProgressFinishedError`: If the subprocess is not running
+                (either finished or errored out).
+            :obj:`NoProgressError`: If unable to read the progress from the
+                temp_file.
+
+        """
+
+        if self.process.poll() is not None:
+            raise ProgressFinishedError
+        else:
+            with open(self.temp_file.name, 'r') as status:
+                line_list = status.readlines()
+            microsec = 0
+            for line in reversed(line_list):
+                if line.split('=')[0] == 'out_time_ms':
+                    try:
+                        microsec = int(line.split('=')[1])
+                        break
+                    except (ValueError, TypeError):
+                        raise NoProgressError
+
+            return microsec
+
+    def acceptable_streams(self, index_list):
+        """Determine if all of the indexes in a list match a :obj:`Stream` in
+        :obj:`self.streams`.
+
+        Note:
+            At this time filmalize can only output audio, video, and subtitle
+            streams.
+
+        Args:
+            index_list (:obj:`list` of :obj:`int`): Indexes that may correspond
+                to :obj:`Stream` instances.
+
+        Returns:
+            :obj:`bool`: True if all of the indexes are valid.
+
+        Raises:
+            :obj:`StreamSelectionError`: If list contains an index that does
+                not correspond to any :obj:`Stream` in :obj:`Container.streams`
+                or if :obj:`Stream.type` is unsupported.
+
+        """
+
+        streams = self.streams_dict
+        for index in index_list:
+            if index not in streams.keys():
+                raise ValueError('This contaner does not contain a stream '
+                                 'with index {}'.format(index))
+            if streams[index].type not in ['audio', 'video', 'subtitle']:
+                raise ValueError('filmalize cannot output streams of type {}'
+                                 .format(streams[index].type))
+        return True
 
     def add_subtitle_file(self, file_name, encoding=None):
-        """Add an external subtitle file. Allow the user to set a custom
+        """Add an external subtitle file. Optionally set a custom file
         encoding.
 
         Args:

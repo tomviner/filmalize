@@ -193,44 +193,6 @@ def build_progress_bars(running, terminal):
                                    fd=writer)
 
 
-def get_progress(container):
-    """Get the transcoding progress of a given Container in microseconds.
-
-    Args:
-        container (Container): The Container whose transcoding process to
-            check.
-
-    Returns:
-        int: The number of microseconds of the file that ffmpeg has finished
-            transcoding.
-
-    Raises:
-        ProgressFinishedError: If the subprocess is not running (either
-            finished or errored out).
-        NoProgressError: If unable to read the progress from the temp_file.
-
-
-    """
-
-    if container.process.poll() is not None:
-        raise ProgressFinishedError
-    else:
-        with open(container.temp_file.name, 'r') as status:
-            line_list = status.readlines()
-        microsec = 0
-        for line in reversed(line_list):
-            if line.split('=')[0] == 'out_time_ms':
-                try:
-                    microsec = int(line.split('=')[1])
-                    break
-                except (ValueError, TypeError):
-                    raise NoProgressError
-
-        pre_progress = container.progress
-        container.progress = microsec
-        return microsec - pre_progress
-
-
 @click.group(context_settings=CONTEXT_SETTINGS)
 @click.option(
     '-f', '--file', help='Specify a file.',
@@ -297,26 +259,28 @@ def convert(ctx):
 
     with terminal.fullscreen():
         while running:
+            total_progress = 0
             for container in running:
                 try:
-                    progress = get_progress(container)
-                    container.pr_bar.update(container.pr_bar.value + progress)
+                    progress = container.progress
+                    container.pr_bar.update(progress)
                 except (ProgressFinishedError, NoProgressError) as _e:
                     if container.process.returncode:
-                        err.write('Warning: ffmpeg error while converting'
-                                  '{}'.format(container.file_name))
                         err.write(container.process.communicate()[1]
                                   .strip(os.linesep))
+                        err.write('Warning: ffmpeg error while converting'
+                                  '{}'.format(container.file_name))
                     if isinstance(_e, NoProgressError):
                         err.write('Warning: Unable to track progress of {}'
                                   .format(container.file_name))
 
                     running.remove(container)
-                    progress = (container.microseconds - container.progress)
+                    progress = container.microseconds
                     container.pr_bar.finish()
 
-                pr_bar.update(pr_bar.value + progress)
+                total_progress += progress
 
+            pr_bar.update(total_progress)
             time.sleep(0.2)
 
     pr_bar.finish()
