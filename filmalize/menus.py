@@ -135,7 +135,7 @@ def stream_menu(container):
 
     Args:
         container (:obj:`Container`): The Container object whose :obj:`Stream`
-        instances to select from or edit.
+            instances to select from or edit.
 
     """
 

@@ -2,7 +2,7 @@
 
 This module contains the classes that do most of the heavy lifting. It should
 stand alone, and allow for other interfaces to be built using it. The main
-class is the Container, which may be created manually, or with the
+class is the :obj:`Container`, which may be created manually, or with the
 :obj:`classmethod` :obj:`Container.from_file`.
 
 """
@@ -122,7 +122,7 @@ class Container(object):
 
         Args:
             file_name (:obj:`str`): The file (a multimedia container) to
-            represent.
+                represent.
 
         Returns:
             :obj:`Container`: Instance representing the given file.
@@ -434,7 +434,7 @@ class Stream(object):
 
             Returns:
                 :obj:`Stream`: Instance populated with data from the given
-                    dictionary.
+                dictionary.
 
         """
 

@@ -33,7 +33,7 @@ class Writer(object):
             to.
         terminal (:obj:`blessed.terminal.Terminal`): Where to write.
         color (:obj:`str`, optional): The color to print in. Must conform to
-            the blessed color function format.
+            the blessed color function `format`_.
 
     Attributes:
         line (:obj:`int`): The line of the screen that this instance writes
@@ -41,6 +41,7 @@ class Writer(object):
         terminal (:obj:`blessed.terminal.Terminal`): Where to write.
         color (:obj:`str`): The color to print in.
 
+    .. _format: http://blessed.readthedocs.io/en/latest/overview.html#colors
     """
 
     def __init__(self, line, terminal, color=None):
@@ -72,7 +73,7 @@ class Writer(object):
         :obj:`progressbar.bar.ProgressBar` objects expect to flush their file
         descriptors, but since we're actually printing to a
         :obj:`blessed.terminal.Terminal`, this method is needed to keep the
-        :obj:`progressbar.bar.ProgressBar` happy.
+        progress bars happy.
 
         Returns:
             :obj:`bool`: True
@@ -122,7 +123,7 @@ class ErrorWriter(object):
 def exclusive(ctx_params, exclusive_params, error_message):
     """Utility function for enforcing exclusivity between click options.
 
-    Call at the top of a :obj:`click.group` or click.group.command() function.
+    Call at the top of a :obj:`click.group` or :obj:`click.command` definition.
 
     Args:
         ctx_params (:obj:`dict`): The context parameters to search.
@@ -171,7 +172,7 @@ def build_containers(file_list):
 
     Args:
         file_list (:obj:`list` of :obj:`str`): File names to attempt to build
-        into containers.
+            into containers.
 
     Returns:
         :obj:`list` of :obj:`Container`: Succesfully built containers.
