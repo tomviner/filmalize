@@ -1,4 +1,10 @@
-"""Command-Line Interface for filmalize."""
+"""Command-Line Interface for filmalize.
+
+This module contains the Click command definitions as well as helper functions.
+It also contains classes used for the progress bars that are displayed to the
+user once the transcoding has been started.
+
+"""
 
 import os
 import time
@@ -19,24 +25,25 @@ CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'])
 
 
 class Writer(object):
-    """An object with a write method that writes to a specific line on the
-    screen, defined at instantiation. This is to be used as a file descriptor
-    for a progresbar.ProgressBar object."""
+    """Writes messages to a specific line on the screen, defined at
+    instantiation.
+
+    Args:
+        line (:obj:`int`): The line of the screen for this instance to write
+            to.
+        terminal (:obj:`blessed.terminal.Terminal`): Where to write.
+        color (:obj:`str`, optional): The color to print in. Must conform to
+            the blessed color function format.
+
+    Attributes:
+        line (:obj:`int`): The line of the screen that this instance writes
+            to.
+        terminal (:obj:`blessed.terminal.Terminal`): Where to write.
+        color (:obj:`str`): The color to print in.
+
+    """
 
     def __init__(self, line, terminal, color=None):
-        """Populate instance variables.
-
-        Note:
-            The optional color argument must conform to the Blessed color
-            attribute format as it will be called.
-
-        Args:
-            line (int): The line of the screen for this instance to write to.
-            terminal (blessed.Terminal): The Terminal object with which to
-                write.
-            color (str, optional): The color to print in.
-
-        """
 
         self.line = line
         self.terminal = terminal
@@ -45,11 +52,11 @@ class Writer(object):
     def write(self, message):
         """Write a message to the screen.
 
-        The message is written to the blessed.Terminal object stored in
-        self.terminal, and in self.color, if set.
+        The message is written to the :obj:`Writer.terminal`, on the
+        :obj:`Writer.line`, and in :obj:`Writer.color`, if set.
 
         Args:
-            message (str): The message to display
+            message (:obj:`str`): The message to display
 
         """
         with self.terminal.location(x=0, y=self.line):
@@ -60,63 +67,92 @@ class Writer(object):
 
     @staticmethod
     def flush():
-        """progresbar.ProgressBar objects expect to flush their file
-        descriptors, but we don't need to worry about that."""
+        """Pretend to flush as if :obj:`Writer` was a real file descriptor.
+
+        :obj:`progressbar.bar.ProgressBar` objects expect to flush their file
+        descriptors, but since we're actually printing to a
+        :obj:`blessed.terminal.Terminal`, this method is needed to keep the
+        :obj:`progressbar.bar.ProgressBar` happy.
+
+        Returns:
+            :obj:`bool`: True
+
+        """
         return True
 
 
 class ErrorWriter(object):
-    """Writes messages in bright red to the bottom of a Terminal."""
+    """Write error messages in bright red to the bottom of a Terminal.
+
+    Args:
+        terminal (:obj:`blessed.terminal.Terminal`): Where to write.
+
+    Attributes:
+        terminal (:obj:`blessed.terminal.Terminal`): Where to write.
+        line (:obj:`int`): The highest line to write to. Starts at the bottom
+            of the screen and increments upward as additional messages are
+            written.
+        messages (:obj:`list` of :obj:`str`): The messages to write.
+
+    """
 
     def __init__(self, terminal):
-        """Populate instance variables.
-
-        Args:
-            terminal (blessed.Terminal): The Terminal object to write to.
-
-        """
 
         self.terminal = terminal
-        self.line = terminal.height
+        self.line = terminal.height - 1
         self.messages = []
 
     def write(self, message):
-        """Write a message to the next lowest line on the Terminal.
+        """Write a message to the lowest line on the Terminal.
 
-        Next, decrement self.line so that the following message goes in the
-        right place. Finally, add message to self.messages for safekeeping.
+        As subsequent messages are written, earlier messages are moved upward.
 
         Args:
-            message (str): The message to display.
+            message (:obj:`str`): The message to display.
 
         """
 
-        with self.terminal.location(x=0, y=self.line):
-            print(self.terminal.red(message))
-        self.line -= 1
         self.messages.append(message)
+        with self.terminal.location(x=0, y=self.line):
+            for message in self.messages:
+                print(self.terminal.red(message), self.terminal.clear_eol)
+        self.line -= 1
 
 
 def exclusive(ctx_params, exclusive_params, error_message):
-    """Utility function for enforcing exclusivity between options.
+    """Utility function for enforcing exclusivity between click options.
 
-    Call at the top of a click.group() or click.group.command() function.
+    Call at the top of a :obj:`click.group` or click.group.command() function.
 
     Args:
-        ctx_params (dict): The context parameters to search.
-        exclusive_params (list of strings): Mutually exclusive parameters.
-        error_message (str): The error message to display.
+        ctx_params (:obj:`dict`): The context parameters to search.
+        exclusive_params (:obj:`list` of :obj:`str`): Mutually exclusive
+            parameters.
+        error_message (:obj:`str`): The error message to display.
 
     Raises:
         click.UsageError: If more than one exclusive parameter is present in
             the context parameters.
 
-    Examples:
-        exclusive(click.get_current_context().params, ['param1', 'param2'],
-            'paramters param1 and param2 are mutually exclusive')
+    Examples::
 
-        exclusive({**ctx.params, **ctx.parent.params}, ['a', 'b'],
-            'command option b may not be specified with application option a')
+        @click.command()
+        @click.option('-s', '--song', default='')
+        @click.option('-a', '--album', default='')
+        def music(song, album):
+            ctx_params = click.get_current_context().ctx_params
+            exclusive_params = ['song', 'album']
+            error_message = 'song and album are mutually exclusive'
+            exclusive(ctx_params, exclusive_params, error_message)
+            ...
+
+        # You can also include parameters from multiple layers of a nested app.
+        ...
+        ctx_params = {**ctx.params, **ctx.parent.params}
+        exclusive_params = ['a', 'b']
+        error_message = 'command option b conflicts with parent option a'
+        exclusive(ctx_params, exclusive_params, error_message)
+        ...
 
     """
 
@@ -125,19 +161,20 @@ def exclusive(ctx_params, exclusive_params, error_message):
 
 
 def build_containers(file_list):
-    """Utility function to build a list of Container objets given a list of
-        filenames.
+    """Utility function to build a list of :obj:`Container` instances given a
+    list of filenames.
 
     Note:
         If a container fails to build as the result of a ffprobe error, that
-            error is echoed, and the building continues. If no containers are
-            built, return an empty list.
+        error is echoed, and the building continues. If no containers are
+        built, an empty list is returned.
 
     Args:
-        file_list (list): File names (str) to attempt to build into containers.
+        file_list (:obj:`list` of :obj:`str`): File names to attempt to build
+        into containers.
 
     Returns:
-        list: Succesfully built containers.
+        :obj:`list` of :obj:`Container`: Succesfully built containers.
 
     """
 
@@ -154,43 +191,6 @@ def build_containers(file_list):
                             .format(_e.file_name), fg='red')
                 click.echo(_e.message)
     return sorted(containers, key=lambda container: container.file_name)
-
-
-def build_progress_bars(running, terminal):
-    """Create ProgressBar objects for each Container in the given list as well
-    as one for all of them.
-
-    The ProgressBar objects are added to each Container as pr_bar.
-
-    Args:
-        running (list): The Container objects to create ProgressBar objects
-            for.
-        terminal (blessed.Terminal): The object to attach each ProgressBar
-            object to.
-
-    Returns:
-        progresbar.ProgressBar: An object for tracking the progress of all of
-            the passed Containers.
-
-    """
-
-    padding = max([len(container.file_name) for container in running])
-    for line_number, container in enumerate(running):
-        label = '{n:{l}}'.format(n=container.file_name, l=padding)
-        widgets = [label, ' | ', progressbar.Percentage(), ' ',
-                   progressbar.Bar(), progressbar.ETA()]
-        writer = Writer(line_number + 2, terminal, 'red_on_black')
-        container.pr_bar = progressbar.ProgressBar(
-            max_value=container.microseconds, widgets=widgets, fd=writer)
-
-    writer = Writer(0, terminal, 'bold_blue_on_black')
-    total_ms = sum([container.microseconds for container in running])
-    label = 'Processing {} files:'.format(len(running))
-    widgets = [label, ' | ', progressbar.Percentage(), ' ', progressbar.Bar(),
-               ' ', progressbar.Timer(), ' | ', progressbar.ETA()]
-
-    return progressbar.ProgressBar(max_value=total_ms, widgets=widgets,
-                                   fd=writer)
 
 
 @click.group(context_settings=CONTEXT_SETTINGS)
@@ -255,7 +255,23 @@ def convert(ctx):
     running = main_menu(containers)
     terminal = blessed.Terminal()
     err = ErrorWriter(terminal)
-    pr_bar = build_progress_bars(running, terminal)
+
+    padding = max([len(container.file_name) for container in running])
+    for line_number, container in enumerate(running):
+        label = '{name:{length}}'.format(name=container.file_name,
+                                         length=padding)
+        widgets = [label, ' | ', progressbar.Percentage(), ' ',
+                   progressbar.Bar(), progressbar.ETA()]
+        writer = Writer(line_number + 2, terminal, 'red_on_black')
+        container.pr_bar = progressbar.ProgressBar(
+            max_value=container.microseconds, widgets=widgets, fd=writer)
+
+    writer = Writer(0, terminal, 'bold_blue_on_black')
+    total_ms = sum([container.microseconds for container in running])
+    widgets = [progressbar.Percentage(), ' ', progressbar.Bar(),
+               ' ', progressbar.Timer(), ' | ', progressbar.ETA()]
+    pr_bar = progressbar.ProgressBar(max_value=total_ms, widgets=widgets,
+                                     fd=writer)
 
     with terminal.fullscreen():
         while running:

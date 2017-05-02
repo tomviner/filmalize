@@ -549,6 +549,9 @@ class SubtitleFile(object):
     def guess_encoding(self):
         """Guess the encoding of the subtitle file.
 
+        Open the given file, read a line, and pass that line to
+        :obj:`chardet.detect` to produce a guess at the file's encoding.
+
         Returns:
             str: The best guess for the subtitle file encoding.
 

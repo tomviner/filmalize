@@ -1,4 +1,9 @@
-"""CLI menu functions for filmalize."""
+"""CLI menu functions for filmalize.
+
+This module contains the functions that define the menu system that the user
+uses to select the streams to transcode and/or edit transcoding parameters.
+
+"""
 
 import sys
 import os
@@ -12,15 +17,25 @@ from filmalize.errors import UserCancelError
 
 class SelectedStreams(click.ParamType):
     """Custom Click parameter type to validate a selection of streams from a
-    Container."""
+    Container.
+
+    This class can be set as the type option in a :obj:`Click.prompt` or other
+    click input and, with the :obj:`convert` method, will check the users input
+    to ensure that the indexes that they have entered match a :obj:`Stream`
+    in the :obj:`Container` specified at instantiation.
+
+    Args:
+        container (:obj:`Container`): The Container to check for Stream
+            indexes.
+
+    """
 
     def __init__(self, container):
-        """Initialize type: Set working Container."""
 
         self.container = container
 
     def convert(self, value, param, ctx):
-        """Validate that input stream indexes are acceptable. Return indices
+        """Validate that input stream indexes are acceptable. Return indexes
         formatted as a list of integers."""
 
         try:
@@ -44,13 +59,15 @@ def main_menu(containers):
     taken. The user may select from the options Convert, Skip, Edit, and Quit.
     If convert is selected, the conversion is started immediately in a
     subprocess. However, those processes will be terminated if Quit is
-    subsequently selected.
+    subsequently selected. If the user selects Edit, the edit menu is loaded.
 
     Args:
-        containers (list): The Container objects to convert.
+        containers (:obj:`list` of :obj:`Container`): Candidates for
+            conversion.
 
     Returns:
-        list: The container objects whose convert processes have been started.
+        :obj:`list` of :obj:`Container`: The instances that were approved by
+        the user and started.
 
     """
 
@@ -83,12 +100,12 @@ def main_menu(containers):
 def edit_menu(container):
     """The edit menu, which is accessible from the main menu.
 
-    The user may elect to edit the Streams or SubtitleFiles associated with the
-    given container, change the ouput filename, display the raw ffmpeg command,
-    or return to the main menu.
+    The user may elect to edit the :obj:`Stream` or :obj:`SubtitleFile`
+    instances associated with the given :obj:`Container`, change the ouput
+    filename, display the raw ffmpeg command, or return to the main menu.
 
     Args:
-        container (Container): The Container object to edit.
+        container (:obj:`Container`): The Container instance to edit.
 
     """
     menu = 'edit'
@@ -113,12 +130,12 @@ def edit_menu(container):
 def stream_menu(container):
     """The stream menu, which is accessible from the edit menu.
 
-    The user may elect to select the streams to be used in the output file or
-    edit the parameters of one of those streams.
+    The user may elect to select the :obj:`Stream` instances to be included in
+    the output file or edit the parameters of one of those streams.
 
     Args:
-        container (Container): The Container object whose Stream objects to
-        select from or edit.
+        container (:obj:`Container`): The Container object whose :obj:`Stream`
+        instances to select from or edit.
 
     """
 
@@ -136,11 +153,11 @@ def subtitle_menu(container):
     """The subtitle menu, which is accessible from the edit menu.
 
     The user may elect to add, remove, or change the encoding of a
-    SubtitleFile.
+    :obj:`SubtitleFile`.
 
     Args:
-        container (Container): The Container object whose SubtitleFile objects
-        to add, remove, or change.
+        container (:obj:`Container`): The Container instance whose SubtitleFile
+           instances to add to, remove, or change.
 
     """
 
@@ -163,10 +180,11 @@ def yes_no(prompt):
         they do so.
 
     Args:
-        prompt (str): The question to ask the user.
+        prompt (:obj:`str`): The question to ask the user.
 
     Returns:
-        bool: True if the user enters 'y' or false if the user enters 'n'.
+        :obj:`bool`: True if the user enters 'y' or False if the user enters
+        'n'.
 
     """
     while True:
@@ -189,15 +207,16 @@ def multiple_choice(prompt, responses, key=None):
         will be prompted repeatedly until they do so.
 
     Args:
-        prompt (str): The question to ask the user.
-        responses (list of str): The possible answers to the question in the
-            form of individual characters. The characters will be displayed to
-            the user separated by '/' characters.
-        key (str, optional): A key to relate the characters in the responses
-            list to answers to the prompt.
+        prompt (:obj:`str`): The question to ask the user.
+        responses (:obj:`list` of :obj:`str`): The possible answers to the
+            question in the form of individual characters. The characters will
+            be displayed to the user separated by '/' characters.
+        key (:obj:`str`, optional): A key to relate the characters in the
+            responses list to answers to the prompt.
 
     Returns:
-        str: The character from the responses list that the user selected.
+        :obj:`str`: The character from the responses list that the user
+        selected.
 
     """
 
@@ -217,7 +236,7 @@ def multiple_choice(prompt, responses, key=None):
 
 
 def display_container(container):
-    """Echo a pretty representation of a given Container."""
+    """Echo a pretty representation of a given :obj:`Container` instance."""
 
     click.secho('*** File: {} ***'.format(container.file_name), fg='magenta')
     if container.labels.title:
@@ -239,12 +258,8 @@ def display_container(container):
 
 
 def display_conversion(container):
-    """Echo a pretty representation of the conversion actions to take.
-
-    Args:
-        container (Container): The Container to display.
-
-    """
+    """Echo a pretty representation of the conversion actions to perform on a
+    given :obj:`Container`."""
 
     click.clear()
     display_container(container)
@@ -265,7 +280,7 @@ def display_conversion(container):
 
 
 def display_stream(stream):
-    """Echo a pretty representation of a given Stream."""
+    """Echo a pretty representation of a given :obj:`Stream`."""
 
     stream_header = 'Stream {}:'.format(stream.index)
     stream_info = [stream.type, stream.codec]
@@ -290,27 +305,25 @@ def display_stream(stream):
 
 
 def display_sub_file(sub_file):
-    """Echo a pretty representation of a given SubtitleFile."""
+    """Echo a pretty representation of a given :obj:`SubtitleFile`."""
 
     click.secho('Subtitle File: {}'.format(sub_file.file_name), fg='magenta')
     click.echo('  Encoding: {}'.format(sub_file.encoding))
 
 
 def display_command(container):
-    """Echo the current compiled command for a given Container."""
+    """Echo the current compiled command for a given :obj:`Container`."""
 
     click.secho('Command:', fg='cyan', bold=True)
     click.echo(' '.join(container.build_command()))
 
 
 def add_subtitles(container):
-    """Add an external subtitle file to a given container.
-
-    Args:
-        container (Container): The Container to add a subtitle file to.
+    """Prompt the user to add an external subtitle file (:obj:`SubtitleFile`)
+    to a given :obj:`Container`.
 
     Raises:
-        UserCancelError: If the user cancels adding a subtitle file.
+        :obj:`UserCancelError`: If the user cancels adding a subtitle file.
 
     """
 
@@ -324,14 +337,12 @@ def add_subtitles(container):
 
 
 def remove_subtitles(container):
-    """Remove an external subtitle file.
-
-    Args:
-        container (Container): The Container to remove the subtitle file from.
+    """Prompt the user to remove a chosen :obj:`SubtitleFile` instance from a
+    given :obj:`Container`.
 
     Raises:
-        UserCancelError: If the user cancels removing a subtitle file, or if
-        there are no subtitle files to remove.
+        :obj:`UserCancelError`: If the user cancels removing a subtitle file,
+            or if there are no subtitle files to remove.
 
     """
 
@@ -352,15 +363,12 @@ def remove_subtitles(container):
 
 
 def change_subtitle_encoding(container):
-    """Set a custom encoding for a SubtitleFile in a given Container.
-
-    Args:
-        container (Container): The Container containing the subtitle file to be
-            change.
+    """Promt the user to set a custom encoding for a :obj:`SubtitleFile` in a
+    given:obj:`Container`.
 
     Raises:
-        UserCancelError: If there are no subtitle files to change or the user
-            cancels changing a subtitle file.
+        :obj:`UserCancelError`: If there are no subtitle files to change or the
+            user cancels changing a subtitle file.
 
     """
 
@@ -385,34 +393,28 @@ def change_subtitle_encoding(container):
 
 
 def select_streams(container):
-    """Prompt the user to select streams for processing.
-
-    Args:
-        container (Container): The Container from which the user will select
-            Streams.
+    """Prompt the user to select the :obj:`Stream` instances of a given
+    :obj:`Container` to include in the output file.
 
     Raises:
-        UserCancelError: If the user cancels selecting streams.
+        :obj:`UserCancelError`: If the user cancels selecting streams.
 
     """
 
     try:
         display_container(container)
-        query = 'Which streams would you like'
-        streams = click.prompt(query, type=SelectedStreams(container))
-        container.selected = streams
+        container.selected = click.prompt('Which streams would you like',
+                                          type=SelectedStreams(container))
     except click.exceptions.Abort:
         raise UserCancelError('Cancelled selecting streams.')
 
 
 def edit_stream_options(container):
-    """Prompt the user to select a stream. Edit that stream's options.
-
-    Args:
-        container (Container): The Container with streams to be edited
+    """Prompt the user to select a :obj:`Stream` instance from a given
+    :obj:`Container` and edit its conversion options.
 
     Raises:
-        UserCancelError: If the user cancels editing a stream.
+        :obj:`UserCancelError`: If the user cancels editing a stream.
 
     """
 
@@ -453,13 +455,11 @@ def edit_stream_options(container):
 
 
 def change_file_name(container):
-    """Prompt the user to specify a name for the output file.
-
-    Args:
-        container (Container): The Container whose filename to change.
+    """Prompt the user to specify a name for the output file produced by a
+    given :obj:`Container` instance.
 
     Raises:
-        UserCancelError: If the user cancels entering a name.
+        :obj:`UserCancelError`: If the user cancels entering a name.
 
     """
 
