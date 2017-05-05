@@ -283,10 +283,10 @@ def convert(ctx):
                     container.pr_bar.update(progress)
                 except (ProgressFinishedError, NoProgressError) as _e:
                     if container.process.returncode:
-                        err.write(container.process.communicate()[1]
-                                  .strip(os.linesep))
                         err.write('Warning: ffmpeg error while converting'
                                   '{}'.format(container.file_name))
+                        err.write(container.process.communicate()[1]
+                                  .strip(os.linesep))
                     if isinstance(_e, NoProgressError):
                         err.write('Warning: Unable to track progress of {}'
                                   .format(container.file_name))

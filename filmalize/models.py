@@ -12,7 +12,7 @@ import datetime
 import tempfile
 import subprocess
 import json
-from pathlib import PurePath
+import pathlib
 
 import chardet
 import bitmath
@@ -167,7 +167,7 @@ class Container(object):
         """:obj:`str`: The input filename reformatted with the selected output
         file extension."""
 
-        return PurePath(self.file_name).stem + defaults.ENDING
+        return pathlib.PurePath(self.file_name).stem + defaults.ENDING
 
     @property
     def default_streams(self):

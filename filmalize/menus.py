@@ -7,7 +7,7 @@ uses to select the streams to transcode and/or edit transcoding parameters.
 
 import sys
 import os
-from pathlib import PurePath
+import pathlib
 
 import click
 
@@ -122,7 +122,7 @@ def edit_menu(container):
             try:
                 options[menu](container)
             except UserCancelError as _e:
-                click.secho('{}Warning: {}'.format(os.linesep, _e.message),
+                click.secho('{}Warning: {}'.format(os.linesep, _e),
                             fg='red')
             menu = 'edit'
 
@@ -463,7 +463,7 @@ def change_file_name(container):
 
     """
 
-    default = PurePath(container.file_name).stem + defaults.ENDING
+    default = pathlib.PurePath(container.file_name).stem + defaults.ENDING
     try:
         if yes_no('Use default file name ({})?'.format(default)):
             container.output_name = default

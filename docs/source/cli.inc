@@ -40,8 +40,8 @@
     The :obj:`click.Command` to convert multimedia files.
 
     Take the list of filenames stored in :obj:`click.Context.obj`, use
-    :obj:`build_contaners` to create an :obj:`list` of :obj:`Container`
-    instances. Those instances are displayed for consideration to the user
+    :obj:`cli.build_contaners` to create a :obj:`list` of :obj:`Container`
+    instances. Those instances are displayed to the user for consideration
     using :obj:`menus.main_menu`, which passes back a list of the instances that the
     user has started. Finally, an informative display, which uses
     :obj:`progressbar.bar.ProgressBar` instances for each :obj:`Container` on a 

@@ -18,14 +18,14 @@ class ProbeError(Error):
 class UserCancelError(Error):
     """Custom Exception for when the user cancels an action."""
 
-    def __init__(self, message=None):
-        self.message = message if message else ''
+    pass
 
 
 class ProgressFinishedError(Error):
     """Custom Exception for when a container has finished processing."""
 
     pass
+
 
 class NoProgressError(Error):
     """Custom Exception for when we are unable to track the transcoding
