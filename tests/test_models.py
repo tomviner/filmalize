@@ -501,32 +501,32 @@ class TestContainer:
             running_example_container.temp_file = mock_file(temp_file)
             assert running_example_container.progress == progress
 
-    def test_acceptable(self, example_container):
+    def test_selected(self, example_container):
         """Ensure that all combinations of streams from the example Container
-        are considered acceptable."""
+        can be selected."""
         streams = example_container.streams_dict.keys()
         for repeat, _ in enumerate(streams):
             for index_list in permutations(streams, repeat):
-                assert example_container.acceptable_streams(index_list)
+                example_container.selected = index_list
 
-    def test_acceptable_range(self, example_container):
+    def test_selected_range(self, example_container):
         """Ensure that stream indexes that do not match a Stream in the example
-        container are not considered acceptable."""
+        container can not be selected."""
         streams = list(example_container.streams_dict.keys())
         cases = [[min(streams) - 1], streams + [min(streams) - 1],
                  [max(streams) + 1], streams + [max(streams) + 1]]
         for case in cases:
             with pytest.raises(ValueError):
-                assert not example_container.acceptable_streams(case)
+                example_container.selected = case
 
-    def test_acceptable_type(self, example_container):
+    def test_selected_type(self, example_container):
         """Ensure that streams with a type not in ['audio', 'video',
-        'subtitle'] are not considered acceptable."""
+        'subtitle'] can not be selected."""
         for stream in example_container.streams:
-            assert example_container.acceptable_streams([stream.index])
+            example_container.selected = [stream.index]
             stream.type = 'data'
             with pytest.raises(ValueError):
-                assert example_container.acceptable_streams([stream.index])
+                example_container.selected = [stream.index]
 
     def test_add_sub_file(self, example_container, example_sub_file):
         """Ensure that the Container.add_subtitle_file method properly adds a

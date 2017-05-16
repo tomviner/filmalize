@@ -15,8 +15,8 @@ import filmalize.defaults as defaults
 from filmalize.errors import UserCancelError
 
 
-class SelectedStreams(click.ParamType):
-    """Custom Click parameter type to validate a selection of streams from a
+class SelectStreams(click.ParamType):
+    """Custom Click parameter type to set the selected streams for a
     Container.
 
     This class can be set as the type option in a :obj:`Click.prompt` or other
@@ -31,12 +31,10 @@ class SelectedStreams(click.ParamType):
     """
 
     def __init__(self, container):
-
         self.container = container
 
     def convert(self, value, param, ctx):
-        """Validate that input stream indexes are acceptable. Return indexes
-        formatted as a list of integers."""
+        """Attempt to set input indexes as Container.streams."""
 
         try:
             selected = [int(index) for index in value.strip().split(' ')]
@@ -45,8 +43,7 @@ class SelectedStreams(click.ParamType):
                       'single space')
 
         try:
-            if self.container.acceptable_streams(selected):
-                return selected
+            self.container.selected = selected
         except ValueError as _e:
             self.fail(_e)
 
@@ -314,6 +311,7 @@ def display_sub_file(sub_file):
 def display_command(container):
     """Echo the current compiled command for a given :obj:`Container`."""
 
+    display_conversion(container)
     click.secho('Command:', fg='cyan', bold=True)
     click.echo(' '.join(container.build_command()))
 
@@ -403,8 +401,8 @@ def select_streams(container):
 
     try:
         display_container(container)
-        container.selected = click.prompt('Which streams would you like',
-                                          type=SelectedStreams(container))
+        click.prompt('Which streams would you like',
+                     type=SelectStreams(container))
     except click.exceptions.Abort:
         raise UserCancelError('Cancelled selecting streams.')
 

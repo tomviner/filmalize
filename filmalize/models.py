@@ -135,8 +135,6 @@ class Container(EqualityMixin):
             :obj:`Container`.
         subtitle_files (:obj:`list` of :obj:`SubtitleFile`): Subtitle files to
             add to the output file.
-        selected (:obj:`list` of :obj:`int`): Indexes of the :obj:`Stream`
-            instances to include in the output file.
         output_name (:obj:`str`): Output filename.
         labels (:obj:`ContainerLabel`): Informational metadata about the input
             file.
@@ -159,6 +157,7 @@ class Container(EqualityMixin):
         self.streams = streams
         self.subtitle_files = subtitle_files if subtitle_files else []
         self.output_name = output_name if output_name else self.default_name
+        self._selected = []
         self.selected = selected if selected else self.default_streams
         self.labels = labels if labels else ContainerLabel()
 
@@ -251,6 +250,42 @@ class Container(EqualityMixin):
         return streams
 
     @property
+    def selected(self):
+        """:obj:`list` of :obj:`int`: Indexes of the :obj:`Stream` instances to
+        include in the output file.
+
+        Note:
+            At this time filmalize can only output audio, video, and subtitle
+            streams.
+
+        Attrs:
+            index_list (:obj:`list` of :obj:`int`): The indexes of the Streams
+                to include in the output file.
+
+        Raises:
+            :obj:`ValueError`: If list contains an index that does
+                not correspond to any :obj:`Stream` in :obj:`Container.streams`
+                or if :obj:`Stream.type` is unsupported.
+
+        """
+
+        return self._selected
+
+    @selected.setter
+    def selected(self, index_list):
+
+        streams = self.streams_dict
+        for index in index_list:
+            if index not in streams.keys():
+                raise ValueError('This contaner does not contain a stream '
+                                 'with index {}'.format(index))
+            if streams[index].type not in ['audio', 'video', 'subtitle']:
+                raise ValueError('filmalize cannot output streams of type {}'
+                                 .format(streams[index].type))
+
+        self._selected = sorted(index_list)
+
+    @property
     def streams_dict(self):
         """:obj:`dict` of {:obj:`int`: :obj:`Stream`}: The :obj:`Stream`
         instances in :obj:`Container.streams` keyed by their indexes."""
@@ -278,38 +313,6 @@ class Container(EqualityMixin):
                     break
 
             return microsec
-
-    def acceptable_streams(self, index_list):
-        """Determine if all of the indexes in a list match a :obj:`Stream` in
-        :obj:`self.streams`.
-
-        Note:
-            At this time filmalize can only output audio, video, and subtitle
-            streams.
-
-        Args:
-            index_list (:obj:`list` of :obj:`int`): Indexes that may correspond
-                to :obj:`Stream` instances.
-
-        Returns:
-            :obj:`bool`: True if all of the indexes are valid.
-
-        Raises:
-            :obj:`ValueError`: If list contains an index that does
-                not correspond to any :obj:`Stream` in :obj:`Container.streams`
-                or if :obj:`Stream.type` is unsupported.
-
-        """
-
-        streams = self.streams_dict
-        for index in index_list:
-            if index not in streams.keys():
-                raise ValueError('This contaner does not contain a stream '
-                                 'with index {}'.format(index))
-            if streams[index].type not in ['audio', 'video', 'subtitle']:
-                raise ValueError('filmalize cannot output streams of type {}'
-                                 .format(streams[index].type))
-        return True
 
     def add_subtitle_file(self, file_name, encoding=None):
         """Add an external subtitle file. Optionally set a custom file
