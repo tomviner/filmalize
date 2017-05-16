@@ -14,8 +14,7 @@ import click
 import progressbar
 import blessed
 
-from filmalize.errors import (ProbeError, NoProgressError,
-                              ProgressFinishedError)
+from filmalize.errors import (ProbeError, ProgressFinishedError)
 from filmalize.models import Container
 from filmalize.menus import main_menu, display_container
 
@@ -281,15 +280,11 @@ def convert(ctx):
                 try:
                     progress = container.progress
                     container.pr_bar.update(progress)
-                except (ProgressFinishedError, NoProgressError) as _e:
-                    if container.process.returncode:
-                        err.write('Warning: ffmpeg error while converting'
-                                  '{}'.format(container.file_name))
-                        err.write(container.process.communicate()[1]
-                                  .strip(os.linesep))
-                    if isinstance(_e, NoProgressError):
-                        err.write('Warning: Unable to track progress of {}'
-                                  .format(container.file_name))
+                except (ProgressFinishedError) as _e:
+                    err.write('Warning: ffmpeg error while converting'
+                              '{}'.format(container.file_name))
+                    err.write(container.process.communicate()[1]
+                              .strip(os.linesep))
 
                     running.remove(container)
                     progress = container.microseconds

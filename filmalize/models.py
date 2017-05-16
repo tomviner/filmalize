@@ -3,7 +3,7 @@
 This module contains the classes that do most of the heavy lifting. It should
 stand alone, and allow for other interfaces to be built using it. The main
 class is the :obj:`Container`, which may be created manually, or with the
-:obj:`classmethod` :obj:`Container.from_file`.
+:obj:`classmethod` :obj:`Container.from_file` or :obj:`Container.from_dict`.
 
 """
 
@@ -18,10 +18,36 @@ import chardet
 import bitmath
 
 import filmalize.defaults as defaults
-from filmalize.errors import ProbeError, ProgressFinishedError, NoProgressError
+from filmalize.errors import ProbeError, ProgressFinishedError
 
 
-class ContainerLabel(object):
+class EqualityMixin(object):
+    """Mixin class that adds equality checking.
+
+    Note:
+        Equality checks are performed by checking the equality of the
+        :obj:`object.__dict__` methods of the classes at issue.
+
+        To exclude attributes from the comparison, add an attribute
+        :obj:`equality_ignore` to the class. Populate this attribute with a
+        :obj:`list` of :obj:`str` names of attributes to exclude.
+
+    """
+
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            diff = [other.__dict__[key] == value
+                    for key, value in self.__dict__.items()
+                    if key not in getattr(self, 'equality_ignore', [])]
+            return sum(diff) == len(diff)
+        else:
+            return NotImplemented
+
+    def __ne__(self, other):
+        return not self == other
+
+
+class ContainerLabel(EqualityMixin):
     """Labels for :obj:`Container` objects
 
     Note:
@@ -33,25 +59,54 @@ class ContainerLabel(object):
         size (:obj:`float`, optional): Container file size in MiBs.
         bitrate (:obj:`float`, optional): Container overall bitrate in Mib/s.
         container_format (:obj:`str`, optional): Container file format.
+        length (:obj:`datetime.timedelta`, optional): The duration of the file
+            as a timedelta.
 
     Attributes:
         title (:obj:`str`): Container title.
         size (:obj:`float`): Container file size in MiBs.
         bitrate (:obj:`float`): Container overall bitrate in Mib/s.
         container_format (:obj:`str`): Container file format.
+        length (:obj:`datetime.timedelta`): The duration of the file as a
+            timedelta.
+
 
     """
 
     def __init__(self, title=None, size=None, bitrate=None,
-                 container_format=None):
+                 container_format=None, length=None):
 
         self.title = title if title else ''
         self.size = size if size else ''
         self.bitrate = bitrate if bitrate else ''
         self.container_format = container_format if container_format else ''
+        self.length = length if length else ''
+
+    @classmethod
+    def from_dict(cls, info):
+        """Build a :obj:`ContainerLabel` instance from a dictionary.
+
+        Args:
+            info (:obj:`dict`): Container information in dictionary format
+                structured in the manner of ffprobe json output.
+
+        Returns:
+            Instance populated wtih data from the given dictionary.
+
+        """
+        title = info.get('format', {}).get('tags', {}).get('title', '')
+        f_bytes = int(info.get('format', {}).get('size', 0))
+        size = round(bitmath.MiB(bytes=f_bytes).value, 2) if f_bytes else ''
+        bits = int(info.get('format', {}).get('bit_rate', 0))
+        bitrate = round(bitmath.Mib(bits=bits).value, 2) if bits else ''
+        container_format = info.get('format', {}).get('format_long_name', '')
+        duration = float(info.get('format', {}).get('duration', 0))
+        length = datetime.timedelta(0, round(duration)) if duration else ''
+
+        return cls(title, size, bitrate, container_format, length)
 
 
-class Container(object):
+class Container(EqualityMixin):
     """Multimedia container file object.
 
     Args:
@@ -87,12 +142,12 @@ class Container(object):
             file.
         microseconds (:obj:`int`): The duration of the file expressed in
             microseconds.
-        length (:obj:`datetime.timedelta`): The duration of the file as a
-            timedelta.
         temp_file (:obj:`tempfile.NamedTemporaryFile`): The temporary file for
             ffmpeg to write status information to.
         process (:obj:`subprocess.Popen`): The subprocess in which ffmpeg
             processes the file.
+        equality_ignore (:obj:`list` of :obj:`string`): Attributes to ignore
+            when checking for equality of Container instances.
 
     """
 
@@ -108,17 +163,17 @@ class Container(object):
         self.labels = labels if labels else ContainerLabel()
 
         self.microseconds = int(duration * 1000000)
-        self.length = datetime.timedelta(seconds=round(duration, 0))
         self.temp_file = tempfile.NamedTemporaryFile()
         self.process = None
+        self.equality_ignore = ['temp_file', 'process']
 
     @classmethod
     def from_file(cls, file_name):
         """Build a :obj:`Container` from a given multimedia file.
 
         Attempt to probe the file with ffprobe. If the probe is succesful,
-        finish instatiation using the results of the probe, building
-        :obj:`Stream` instances as necessary.
+        finish instatiation by passing the results to
+        :obj:`Container.from_dict`.
 
         Args:
             file_name (:obj:`str`): The file (a multimedia container) to
@@ -141,24 +196,33 @@ class Container(object):
         if probe_response.returncode:
             raise ProbeError(file_name, probe_response.stderr.decode('utf-8')
                              .strip(os.linesep))
-        else:
-            probe_info = json.loads(probe_response.stdout)
-            labels = ContainerLabel()
-            duration = float(probe_info['format']['duration'])
-            streams = [Stream.from_dict(stream)
-                       for stream in probe_info['streams']]
 
-            if ('tags' in probe_info['format']
-                    and 'title' in probe_info['format']['tags']):
-                labels.title = probe_info['format']['tags']['title']
-            if 'size' in probe_info['format']:
-                file_bytes = int(probe_info['format']['size'])
-                labels.size = round(bitmath.MiB(bytes=file_bytes).value, 2)
-            if 'bit_rate' in probe_info['format']:
-                bits = int(probe_info['format']['bit_rate'])
-                labels.bitrate = round(bitmath.Mib(bits=bits).value, 2)
-            if 'format_name' in probe_info['format']:
-                labels.container_format = probe_info['format']['format_name']
+        info = json.loads(probe_response.stdout)
+        return cls.from_dict(info)
+
+    @classmethod
+    def from_dict(cls, info):
+        """Build a :obj:`Container` from a given dictionary.
+
+        Args:
+            info (:obj:`dict`): Container information in dictionary format
+                structured in the manner of ffprobe json output.
+
+        Returns:
+            :obj:`Container`: Instance representing the given info.
+
+        Raises:
+            :obj:`ProbeError`: If the info does not contain a 'duraton' tag.
+
+        """
+
+        file_name = info['format']['filename']
+        duration = float(info.get('format', {}).get('duration', 0))
+        if not duration:
+            raise ProbeError(file_name, 'File has no duration tag.')
+
+        streams = [Stream.from_dict(stream) for stream in info['streams']]
+        labels = ContainerLabel.from_dict(info)
 
         return cls(file_name, duration, streams, labels=labels)
 
@@ -199,8 +263,6 @@ class Container(object):
         Raises:
             :obj:`ProgressFinishedError`: If the subprocess is not running
                 (either finished or errored out).
-            :obj:`NoProgressError`: If unable to read the progress from the
-                temp_file.
 
         """
 
@@ -212,11 +274,8 @@ class Container(object):
             microsec = 0
             for line in reversed(line_list):
                 if line.split('=')[0] == 'out_time_ms':
-                    try:
-                        microsec = int(line.split('=')[1])
-                        break
-                    except (ValueError, TypeError):
-                        raise NoProgressError
+                    microsec = int(line.split('=')[1])
+                    break
 
             return microsec
 
@@ -236,7 +295,7 @@ class Container(object):
             :obj:`bool`: True if all of the indexes are valid.
 
         Raises:
-            :obj:`StreamSelectionError`: If list contains an index that does
+            :obj:`ValueError`: If list contains an index that does
                 not correspond to any :obj:`Stream` in :obj:`Container.streams`
                 or if :obj:`Stream.type` is unsupported.
 
@@ -281,7 +340,7 @@ class Container(object):
 
         Returns:
             :obj:`list` of :obj:`str`: The ffmpeg command and options to
-                execute.
+            execute.
 
         """
 
@@ -310,7 +369,7 @@ class Container(object):
         return command
 
 
-class StreamLabel(object):
+class StreamLabel(EqualityMixin):
     """Labels for :obj:`Stream` objects.
 
     Note:
@@ -318,9 +377,9 @@ class StreamLabel(object):
         exception) will not affect the output file.
 
         For audio streams, if this stream cannot be copied and must be
-        transcoded, and if there is a value stored in self.bitrate, that
-        value will be chosen by default as the output stream target
-        bitrate.
+        transcoded, if there is not a :obj:`Stream.custom_bitrate` set, and if
+        there is a value stored in :obj:`StreamLabel.bitrate`, that value
+        will be chosen by default as the output stream target bitrate.
 
     Args:
         title (:obj:`str`): Stream title.
@@ -352,6 +411,37 @@ class StreamLabel(object):
         self.channels = channels if channels else ''
         self._default = 'default' if default else ''
 
+    @classmethod
+    def from_dict(cls, info):
+        """Build a :obj:`StreamLabel` instance from a dictionary.
+
+        Args:
+            info (:obj:`dict`): Stream information in dictionary format
+                structured in the manner of ffprobe json output.
+
+        Returns:
+            Instance populated with the data from the given directory.
+
+        """
+
+        stream_type = info['codec_type']
+        title = info.get('tags', {}).get('title', '')
+        bits = int(info.get('bit_rate', 0))
+        if stream_type == 'video' and bits:
+            bitrate = round(bitmath.Mib(bits=bits).value, 2)
+        elif stream_type == 'audio' and bits:
+            bitrate = round(bitmath.Kib(bits=bits).value)
+        else:
+            bitrate = ''
+        height = str(info.get('height', info.get('coded_height', '')))
+        width = str(info.get('width', info.get('coded_width', '')))
+        resolution = width + 'x' + height if height and width else ''
+        language = info.get('tags', {}).get('language', '')
+        channels = info.get('channel_layout', '')
+        default = bool(info.get('disposition', {}).get('default'))
+
+        return cls(title, bitrate, resolution, language, channels, default)
+
     @property
     def default(self):
         """:obj:`str`: 'default' if this stream is the default stream of its
@@ -369,7 +459,7 @@ class StreamLabel(object):
         self._default = 'default' if is_default else ''
 
 
-class Stream(object):
+class Stream(EqualityMixin):
     """Multimedia stream object.
 
     Note:
@@ -418,18 +508,18 @@ class Stream(object):
         self.index = index
         self.type = stream_type
         self.codec = codec
-        self.custom_crf = custom_crf
-        self.custom_bitrate = custom_bitrate
+        self.custom_crf = custom_crf if custom_crf else None
+        self.custom_bitrate = custom_bitrate if custom_bitrate else None
         self.labels = labels if labels else StreamLabel()
 
         self.option_summary = None
 
     @classmethod
-    def from_dict(cls, stream_info):
+    def from_dict(cls, info):
         """Build a :obj:`Stream` instance from a dictionary.
 
             Args:
-                stream_info (:obj:`dict`): Stream information in dictionary
+                info (:obj:`dict`): Stream information in dictionary
                     format structured in the manner of ffprobe json output.
 
             Returns:
@@ -438,40 +528,10 @@ class Stream(object):
 
         """
 
-        index = stream_info['index']
-        stream_type = stream_info['codec_type']
-        codec = stream_info['codec_name']
-
-        labels = StreamLabel()
-        if 'tags' in stream_info and 'language' in stream_info['tags']:
-            labels.language = stream_info['tags']['language']
-        if ('disposition' in stream_info
-                and 'default' in stream_info['disposition']):
-            labels.default = bool(stream_info['disposition']['default'])
-        if 'tags' in stream_info and 'title' in stream_info['tags']:
-            labels.title = stream_info['tags']['title']
-
-        if stream_type == 'video':
-            if 'height' in stream_info and 'width' in stream_info:
-                width = str(stream_info['width'])
-                height = str(stream_info['height'])
-                labels.resolution = width + 'x' + height
-            elif ('coded_height' in stream_info
-                  and 'coded_width' in stream_info):
-                width = str(stream_info['coded_width'])
-                height = str(stream_info['coded_height'])
-                labels.resolution = width + 'x' + height
-            if 'bit_rate' in stream_info:
-                bits = int(stream_info['bit_rate'])
-                labels.bitrate = round(bitmath.Mib(bits=bits).value, 2)
-            if 'field_order' in stream_info:
-                labels.bitrate = stream_info['field_order']
-        elif stream_type == 'audio':
-            if 'channel_layout' in stream_info:
-                labels.channels = stream_info['channel_layout']
-            if 'bit_rate' in stream_info:
-                bits = int(stream_info['bit_rate'])
-                labels.bitrate = round(bitmath.Kib(bits=bits).value)
+        index = info['index']
+        stream_type = info['codec_type']
+        codec = info.get('codec_name', '')
+        labels = StreamLabel.from_dict(info)
 
         return cls(index, stream_type, codec, labels=labels)
 
@@ -497,8 +557,8 @@ class Stream(object):
             if self.custom_crf or self.codec != defaults.C_VIDEO:
                 crf = (self.custom_crf if self.custom_crf
                        else defaults.CRF)
-                options.extend(['libx264', '-preset', 'slow', '-crf', str(crf),
-                                '-pix_fmt', 'yuv420p'])
+                options.extend(['libx264', '-preset', defaults.PRESET, '-crf',
+                                str(crf), '-pix_fmt', 'yuv420p'])
                 self.option_summary = ('transcode -> {}, crf={}'
                                        .format(defaults.C_VIDEO, crf))
             else:
@@ -518,13 +578,18 @@ class Stream(object):
                 options.extend(['copy'])
                 self.option_summary = 'copy'
         elif self.type == 'subtitle':
-            options.extend(['-c:s:{}'.format(number), defaults.C_SUBS])
-            self.option_summary = 'transcode -> {}'.format(defaults.C_SUBS)
+            options.extend(['-c:s:{}'.format(number)])
+            if self.codec == defaults.C_SUBS:
+                options.extend(['copy'])
+                self.option_summary = 'copy'
+            else:
+                options.extend([defaults.C_SUBS])
+                self.option_summary = 'transcode -> {}'.format(defaults.C_SUBS)
 
         return options
 
 
-class SubtitleFile(object):
+class SubtitleFile(EqualityMixin):
     """Subtitle file object.
 
     Args:
@@ -557,6 +622,6 @@ class SubtitleFile(object):
 
         """
         with open(self.file_name, mode='rb') as _file:
-            line = _file.readline()
-        detected = chardet.detect(line)
+            lines = [_file.readline() for _ in range(10)]
+        detected = chardet.detect(b''.join(lines))
         return detected['encoding']

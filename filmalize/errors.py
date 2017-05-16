@@ -27,8 +27,3 @@ class ProgressFinishedError(Error):
     pass
 
 
-class NoProgressError(Error):
-    """Custom Exception for when we are unable to track the transcoding
-    progress of a container."""
-
-    pass

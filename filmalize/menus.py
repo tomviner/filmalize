@@ -242,7 +242,7 @@ def display_container(container):
     if container.labels.title:
         click.secho('Title: {}'.format(container.labels.title), fg='cyan')
 
-    file_description = ['Length: {}'.format(container.length)]
+    file_description = ['Length: {}'.format(container.labels.length)]
     file_description.append('Size: {}MiB'.format(container.labels.size))
     file_description.append('Bitrate: {}Mib/s'
                             .format(container.labels.bitrate))
