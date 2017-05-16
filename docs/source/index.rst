@@ -6,6 +6,7 @@ Welcome to filmalize!
 
    quickstart
    api
+   ffprobe
 
 .. include:: ../../README.rst
 
