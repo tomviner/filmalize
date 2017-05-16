@@ -1,0 +1,20 @@
+1
+00:03:50,671 --> 00:03:51,734
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. 
+
+2
+00:03:53,858 --> 00:03:55,105
+Proin tellus lectus, tristique eget cursus sit amet, porta et lectus. 
+
+3
+00:03:55,798 --> 00:03:56,887
+Proin egestas tristique erat. Donec metus nibh, mollis sed placerat ac, ultricies ut purus. 
+
+4
+00:04:01,688 --> 00:04:02,920
+Praesent ipsum mauris, facilisis ac scelerisque eu, sodales mattis metus. 
+
+5
+00:04:06,901 --> 00:04:07,932
+Sed eu justo nec arcu pharetra molestie. 
+
