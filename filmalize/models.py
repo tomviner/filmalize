@@ -258,10 +258,6 @@ class Container(EqualityMixin):
             At this time filmalize can only output audio, video, and subtitle
             streams.
 
-        Attrs:
-            index_list (:obj:`list` of :obj:`int`): The indexes of the Streams
-                to include in the output file.
-
         Raises:
             :obj:`ValueError`: If list contains an index that does
                 not correspond to any :obj:`Stream` in :obj:`Container.streams`
