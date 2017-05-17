@@ -8,7 +8,6 @@ user once the transcoding has been started.
 
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import click
 import progressbar
@@ -166,7 +165,7 @@ def build_containers(file_list):
 
     Note:
         If a container fails to build as the result of a ffprobe error, that
-        error is echoed, and the building continues. If no containers are
+        error is echoed after building has completed. If no containers are
         built, an empty list is returned.
 
     Args:
@@ -179,17 +178,17 @@ def build_containers(file_list):
     """
 
     containers = []
-    with ThreadPoolExecutor() as executor:
-        futures = []
-        for file_name in file_list:
-            futures.append(executor.submit(Container.from_file, file_name))
-        for future in as_completed(futures):
+    errors = []
+    with click.progressbar(file_list, label='Scanning Files') as pr_bar:
+        for file_name in pr_bar:
             try:
-                containers.append(future.result())
+                containers.append(Container.from_file(file_name))
             except ProbeError as _e:
-                click.secho('Warning: unable to process {}'
-                            .format(_e.file_name), fg='red')
-                click.echo(_e.message)
+                errors.append(_e)
+    for error in errors:
+        click.secho('Warning: unable to process {}'
+                    .format(error.file_name), fg='red')
+        click.echo(error.message)
     return sorted(containers, key=lambda container: container.file_name)
 
 
