@@ -13,109 +13,13 @@ import click
 import progressbar
 import blessed
 
-from filmalize.errors import (ProbeError, ProgressFinishedError)
-from filmalize.models import Container
-from filmalize.menus import main_menu, display_container
+from filmalize.errors import ProbeError, ProgressFinishedError
+from filmalize.cli_models import Writer, ErrorWriter, CliContainer
+from filmalize.menus import main_menu
 
 
 # Allow help to be called with '-h' as well as the default '--help'.
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'])
-
-
-class Writer(object):
-    """Writes messages to a specific line on the screen, defined at
-    instantiation.
-
-    Args:
-        line (:obj:`int`): The line of the screen for this instance to write
-            to.
-        terminal (:obj:`blessed.terminal.Terminal`): Where to write.
-        color (:obj:`str`, optional): The color to print in. Must conform to
-            the blessed color function `format`_.
-
-    Attributes:
-        line (:obj:`int`): The line of the screen that this instance writes
-            to.
-        terminal (:obj:`blessed.terminal.Terminal`): Where to write.
-        color (:obj:`str`): The color to print in.
-
-    .. _format: http://blessed.readthedocs.io/en/latest/overview.html#colors
-    """
-
-    def __init__(self, line, terminal, color=None):
-
-        self.line = line
-        self.terminal = terminal
-        self.color = color
-
-    def write(self, message):
-        """Write a message to the screen.
-
-        The message is written to the :obj:`Writer.terminal`, on the
-        :obj:`Writer.line`, and in :obj:`Writer.color`, if set.
-
-        Args:
-            message (:obj:`str`): The message to display
-
-        """
-        with self.terminal.location(x=0, y=self.line):
-            if self.color:
-                print(getattr(self.terminal, self.color)(message))
-            else:
-                print(message)
-
-    @staticmethod
-    def flush():
-        """Pretend to flush as if :obj:`Writer` was a real file descriptor.
-
-        :obj:`progressbar.bar.ProgressBar` objects expect to flush their file
-        descriptors, but since we're actually printing to a
-        :obj:`blessed.terminal.Terminal`, this method is needed to keep the
-        progress bars happy.
-
-        Returns:
-            :obj:`bool`: True
-
-        """
-        return True
-
-
-class ErrorWriter(object):
-    """Write error messages in bright red to the bottom of a Terminal.
-
-    Args:
-        terminal (:obj:`blessed.terminal.Terminal`): Where to write.
-
-    Attributes:
-        terminal (:obj:`blessed.terminal.Terminal`): Where to write.
-        line (:obj:`int`): The highest line to write to. Starts at the bottom
-            of the screen and increments upward as additional messages are
-            written.
-        messages (:obj:`list` of :obj:`str`): The messages to write.
-
-    """
-
-    def __init__(self, terminal):
-
-        self.terminal = terminal
-        self.line = terminal.height - 1
-        self.messages = []
-
-    def write(self, message):
-        """Write a message to the lowest line on the Terminal.
-
-        As subsequent messages are written, earlier messages are moved upward.
-
-        Args:
-            message (:obj:`str`): The message to display.
-
-        """
-
-        self.messages.append(message)
-        with self.terminal.location(x=0, y=self.line):
-            for message in self.messages:
-                print(self.terminal.red(message), self.terminal.clear_eol)
-        self.line -= 1
 
 
 def exclusive(ctx_params, exclusive_params, error_message):
@@ -182,7 +86,7 @@ def build_containers(file_list):
     with click.progressbar(file_list, label='Scanning Files') as pr_bar:
         for file_name in pr_bar:
             try:
-                containers.append(Container.from_file(file_name))
+                containers.append(CliContainer.from_file(file_name))
             except ProbeError as _e:
                 errors.append(_e)
     for error in errors:
@@ -194,7 +98,7 @@ def build_containers(file_list):
 
 @click.group(context_settings=CONTEXT_SETTINGS)
 @click.option(
-    '-f', '--file', help='Specify a file.',
+    '-f', '--single_file', help='Specify a file.',
     type=click.Path(exists=True, dir_okay=False, readable=True),
 )
 @click.option(
@@ -203,7 +107,7 @@ def build_containers(file_list):
 )
 @click.option('-r', '--recursive', is_flag=True, help='Operate recursively.')
 @click.pass_context
-def cli(ctx, file, directory, recursive):
+def cli(ctx, single_file, directory, recursive):
     """A simple tool for converting video files.
 
     By default filmalize operates on all files in the current directory. If
@@ -212,22 +116,22 @@ def cli(ctx, file, directory, recursive):
 
     """
 
-    exclusive(ctx.params, ['file', 'directory'],
+    exclusive(ctx.params, ['single_file', 'directory'],
               'a file may not be specified with a directory')
-    exclusive(ctx.params, ['file', 'recursive'],
+    exclusive(ctx.params, ['single_file', 'recursive'],
               'a file may not be specified with the recursive flag')
 
     ctx.obj = {}
 
-    if file:
-        ctx.obj['FILES'] = [file]
+    if single_file:
+        ctx.obj['FILES'] = [single_file]
     else:
         directory = directory if directory else '.'
         if recursive:
             ctx.obj['FILES'] = sorted(
-                [os.path.join(root, file)
+                [os.path.join(root, single_file)
                  for root, dirs, files in os.walk(directory)
-                 for file in files]
+                 for single_file in files]
             )
         else:
             ctx.obj['FILES'] = sorted(
@@ -242,7 +146,7 @@ def display(ctx):
     """Display information about video file(s)"""
 
     for container in build_containers(ctx.obj['FILES']):
-        display_container(container)
+        container.display()
 
 
 @cli.command()
@@ -257,13 +161,7 @@ def convert(ctx):
 
     padding = max([len(container.file_name) for container in running])
     for line_number, container in enumerate(running):
-        label = '{name:{length}}'.format(name=container.file_name,
-                                         length=padding)
-        widgets = [label, ' | ', progressbar.Percentage(), ' ',
-                   progressbar.Bar(), progressbar.ETA()]
-        writer = Writer(line_number + 2, terminal, 'red_on_black')
-        container.pr_bar = progressbar.ProgressBar(
-            max_value=container.microseconds, widgets=widgets, fd=writer)
+        container.add_progress(terminal, line_number + 2, padding)
 
     writer = Writer(0, terminal, 'bold_blue_on_black')
     total_ms = sum([container.microseconds for container in running])
@@ -280,7 +178,7 @@ def convert(ctx):
                     progress = container.progress
                     container.pr_bar.update(progress)
                 except (ProgressFinishedError) as _e:
-                    err.write('Warning: ffmpeg error while converting'
+                    err.write('Warning: ffmpeg error while converting '
                               '{}'.format(container.file_name))
                     err.write(container.process.communicate()[1]
                               .strip(os.linesep))

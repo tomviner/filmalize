@@ -103,7 +103,8 @@ class ContainerLabel(EqualityMixin):
         duration = float(info.get('format', {}).get('duration', 0))
         length = datetime.timedelta(0, round(duration)) if duration else ''
 
-        return cls(title, size, bitrate, container_format, length)
+        return cls(title=title, size=size, bitrate=bitrate,
+                   container_format=container_format, length=length)
 
 
 class Container(EqualityMixin):
@@ -223,7 +224,8 @@ class Container(EqualityMixin):
         streams = [Stream.from_dict(stream) for stream in info['streams']]
         labels = ContainerLabel.from_dict(info)
 
-        return cls(file_name, duration, streams, labels=labels)
+        return cls(file_name=file_name, duration=duration, streams=streams,
+                   labels=labels)
 
     @property
     def default_name(self):
@@ -439,7 +441,8 @@ class StreamLabel(EqualityMixin):
         channels = info.get('channel_layout', '')
         default = bool(info.get('disposition', {}).get('default'))
 
-        return cls(title, bitrate, resolution, language, channels, default)
+        return cls(title=title, bitrate=bitrate, resolution=resolution,
+                   language=language, channels=channels, default=default)
 
     @property
     def default(self):
@@ -532,7 +535,8 @@ class Stream(EqualityMixin):
         codec = info.get('codec_name', '')
         labels = StreamLabel.from_dict(info)
 
-        return cls(index, stream_type, codec, labels=labels)
+        return cls(index=index, stream_type=stream_type, codec=codec,
+                   labels=labels)
 
     def build_options(self, number=0):
         """Generate ffmpeg codec/bitrate options for this :obj:`Stream`.

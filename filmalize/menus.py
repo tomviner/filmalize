@@ -13,39 +13,7 @@ import click
 
 import filmalize.defaults as defaults
 from filmalize.errors import UserCancelError
-
-
-class SelectStreams(click.ParamType):
-    """Custom Click parameter type to set the selected streams for a
-    Container.
-
-    This class can be set as the type option in a :obj:`Click.prompt` or other
-    click input and, with the :obj:`convert` method, will check the users input
-    to ensure that the indexes that they have entered match a :obj:`Stream`
-    in the :obj:`Container` specified at instantiation.
-
-    Args:
-        container (:obj:`Container`): The Container to check for Stream
-            indexes.
-
-    """
-
-    def __init__(self, container):
-        self.container = container
-
-    def convert(self, value, param, ctx):
-        """Attempt to set input indexes as Container.streams."""
-
-        try:
-            selected = [int(index) for index in value.strip().split(' ')]
-        except (ValueError, TypeError):
-            self.fail('Invalid input. Enter stream indexes separated by a '
-                      'single space')
-
-        try:
-            self.container.selected = selected
-        except ValueError as _e:
-            self.fail(_e)
+from filmalize.cli_models import SelectStreams, CliSubFile
 
 
 def main_menu(containers):
@@ -73,7 +41,7 @@ def main_menu(containers):
         menu = 'main'
         while True:
             if menu == 'main':
-                display_conversion(container)
+                container.display_conversion()
 
                 menu = multiple_choice('Main Menu:', ['c', 's', 'e', 'q'],
                                        'Convert/Skip/Edit/Quit')
@@ -113,9 +81,12 @@ def edit_menu(container):
                                    'Change Filename/Display Command/Main Menu')
         elif menu == 'm':
             break
+        elif menu == 'd':
+            container.display_command()
+            menu = 'edit'
         else:
             options = {'e': stream_menu, 's': subtitle_menu,
-                       'f': change_file_name, 'd': display_command}
+                       'f': change_file_name}
             try:
                 options[menu](container)
             except UserCancelError as _e:
@@ -136,7 +107,7 @@ def stream_menu(container):
 
     """
 
-    display_conversion(container)
+    container.display_conversion()
     menu = multiple_choice('Stream Menu:', ['s', 'e', 'c'],
                            'Select Active Streams/Edit Stream/Cancel')
     if menu == 'c':
@@ -158,9 +129,9 @@ def subtitle_menu(container):
 
     """
 
-    display_conversion(container)
-    menu = multiple_choice('Subtitle File Menu:', ['a', 'r', 'e'],
-                           'Add/Remove/Change Encoding')
+    container.display_conversion()
+    menu = multiple_choice('Subtitle File Menu:', ['a', 'r', 'e', 'c'],
+                           'Add/Remove/Change Encoding/Cancel')
     if menu == 'c':
         return
     else:
@@ -232,90 +203,6 @@ def multiple_choice(prompt, responses, key=None):
             click.echo('Invalid input, try again...')
 
 
-def display_container(container):
-    """Echo a pretty representation of a given :obj:`Container` instance."""
-
-    click.secho('*** File: {} ***'.format(container.file_name), fg='magenta')
-    if container.labels.title:
-        click.secho('Title: {}'.format(container.labels.title), fg='cyan')
-
-    file_description = ['Length: {}'.format(container.labels.length)]
-    file_description.append('Size: {}MiB'.format(container.labels.size))
-    file_description.append('Bitrate: {}Mib/s'
-                            .format(container.labels.bitrate))
-    file_description.append('Container: {}'
-                            .format(container.labels.container_format))
-    click.echo(' | '.join(file_description))
-
-    for stream in container.streams:
-        display_stream(stream)
-
-    for sub_file in container.subtitle_files:
-        display_sub_file(sub_file)
-
-
-def display_conversion(container):
-    """Echo a pretty representation of the conversion actions to perform on a
-    given :obj:`Container`."""
-
-    click.clear()
-    display_container(container)
-    click.secho('Filmalize Actions:', fg='cyan', bold=True)
-    for stream in container.streams:
-        if stream.index in container.selected:
-            header = 'Stream {}: '.format(stream.index)
-            stream.build_options()
-            info = stream.option_summary
-            click.echo(click.style(header, fg='green', bold=True)
-                       + click.style(info, fg='yellow'))
-    for subtitle in container.subtitle_files:
-        click.echo(
-            click.style(subtitle.file_name + ': ', fg='green', bold=True)
-            + click.style(subtitle.option_summary, fg='yellow')
-        )
-    click.secho('Output File: {}'.format(container.output_name), fg='magenta')
-
-
-def display_stream(stream):
-    """Echo a pretty representation of a given :obj:`Stream`."""
-
-    stream_header = 'Stream {}:'.format(stream.index)
-    stream_info = [stream.type, stream.codec]
-    stream_info.append(stream.labels.language)
-    stream_info.append(stream.labels.default)
-    click.echo('  ' + click.style(stream_header, fg='green', bold=True)
-               + ' ' + click.style(' '.join(stream_info), fg='yellow'))
-
-    if stream.labels.title:
-        click.echo('    Title: {}'.format(stream.labels.title))
-
-    stream_specs = []
-    if stream.type == 'video':
-        stream_specs.append('Resolution: {}'
-                            .format(stream.labels.resolution))
-        stream_specs.append('Bitrate: {}Mib/s'.format(stream.labels.bitrate))
-    elif stream.type == 'audio':
-        stream_specs.append('Channels: {}'.format(stream.labels.channels))
-        stream_specs.append('Bitrate: {}Kib/s'.format(stream.labels.bitrate))
-    if stream_specs:
-        click.echo('    ' + ' | '.join(stream_specs))
-
-
-def display_sub_file(sub_file):
-    """Echo a pretty representation of a given :obj:`SubtitleFile`."""
-
-    click.secho('Subtitle File: {}'.format(sub_file.file_name), fg='magenta')
-    click.echo('  Encoding: {}'.format(sub_file.encoding))
-
-
-def display_command(container):
-    """Echo the current compiled command for a given :obj:`Container`."""
-
-    display_conversion(container)
-    click.secho('Command:', fg='cyan', bold=True)
-    click.echo(' '.join(container.build_command()))
-
-
 def add_subtitles(container):
     """Prompt the user to add an external subtitle file (:obj:`SubtitleFile`)
     to a given :obj:`Container`.
@@ -326,12 +213,14 @@ def add_subtitles(container):
     """
 
     try:
-        sub_file = click.prompt('Enter subtitle file name', type=click.Path(
-            exists=True, dir_okay=False, readable=True))
+        sub_file = click.prompt(
+            'Enter subtitle file name',
+            type=click.Path(exists=True, dir_okay=False, readable=True)
+        )
     except click.exceptions.Abort:
         raise UserCancelError('Cancelled adding subtitle file.')
 
-    container.add_subtitle_file(sub_file)
+    container.subtitle_files.append(CliSubFile(sub_file))
 
 
 def remove_subtitles(container):
@@ -349,7 +238,7 @@ def remove_subtitles(container):
     else:
         for index, subtitle in enumerate(container.subtitle_files):
             click.secho('Number: {}'.format(index), fg='cyan', bold=True)
-            display_sub_file(subtitle)
+            subtitle.display()
         file_indices = [str(i) for i in range(len(container.subtitle_files))]
         acceptable = file_indices + ['c']
         action = multiple_choice('Enter the file number to remove, or c to '
@@ -375,7 +264,7 @@ def change_subtitle_encoding(container):
     else:
         for index, subtitle in enumerate(container.subtitle_files):
             click.secho('Number: {}'.format(index), fg='cyan', bold=True)
-            display_sub_file(subtitle)
+            subtitle.display()
         file_indices = [str(i) for i in range(len(container.subtitle_files))]
         acceptable = file_indices + ['c']
         action = multiple_choice('Enter the file number to change, or c to '
@@ -400,7 +289,7 @@ def select_streams(container):
     """
 
     try:
-        display_container(container)
+        container.display()
         click.prompt('Which streams would you like',
                      type=SelectStreams(container))
     except click.exceptions.Abort:
@@ -416,7 +305,7 @@ def edit_stream_options(container):
 
     """
 
-    display_container(container)
+    container.display()
     indexes = [str(stream.index) for stream in container.streams
                if (stream.type in ['audio', 'video']
                    and stream.index in container.selected)]
