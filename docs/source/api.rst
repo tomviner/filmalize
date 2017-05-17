@@ -10,6 +10,12 @@ Models
 .. automodule:: models
    :members:
 
+CLI Models
+----------
+
+.. automodule:: cli_models
+   :members:
+
 CLI
 ---
 

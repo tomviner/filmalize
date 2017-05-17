@@ -125,7 +125,8 @@ class ErrorWriter(object):
         self.messages = []
 
     def write(self, message):
-        """Write a message to the lowest line on the Terminal.
+        """Add a message to the list and display all  messages at the bottom of
+        the Terminal.
 
         As subsequent messages are written, earlier messages are moved upward.
 
@@ -152,7 +153,7 @@ class CliContainer(Container):
         **kwargs: :obj:`Container` arguments.
 
     Attributes:
-        writer (:obj:`cli.Writer`): Object with which to write.
+        writer (:obj:`Writer`): Object with which to write.
         pr_bar (:obj:`progressbar.bar.ProgressBar`): Progress bar to write.
 
     """
@@ -171,7 +172,7 @@ class CliContainer(Container):
                 structured in the manner of ffprobe json output.
 
         Returns:
-            :obj:`Container`: Instance representing the given info.
+            :obj:`CliContainer`: Instance representing the given info.
 
         Raises:
             :obj:`ProbeError`: If the info does not contain a 'duraton' tag.
