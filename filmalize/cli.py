@@ -178,10 +178,11 @@ def convert(ctx):
                     progress = container.progress
                     container.pr_bar.update(progress)
                 except (ProgressFinishedError) as _e:
-                    err.write('Warning: ffmpeg error while converting '
-                              '{}'.format(container.file_name))
-                    err.write(container.process.communicate()[1]
-                              .strip(os.linesep))
+                    if container.process.returncode:
+                        err.write('Warning: ffmpeg error while converting '
+                                  '{}'.format(container.file_name))
+                        err.write(container.process.communicate()[1]
+                                  .strip(os.linesep))
 
                     running.remove(container)
                     progress = container.microseconds

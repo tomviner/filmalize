@@ -298,8 +298,9 @@ class Container(EqualityMixin):
                 (either finished or errored out).
 
         """
-
-        if self.process.poll() is not None:
+        if not self.process:
+            return 0
+        elif self.process.poll() is not None:
             raise ProgressFinishedError
         else:
             with open(self.temp_file.name, 'r') as status:

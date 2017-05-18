@@ -205,7 +205,7 @@ class CliContainer(Container):
 
         label = '{name:{length}}'.format(name=self.file_name, length=padding)
         widgets = [label, ' | ', progressbar.Percentage(), ' ',
-                   progressbar.Bar(), progressbar.ETA()]
+                   progressbar.Bar(), ' ', progressbar.ETA()]
         self.writer = Writer(line_number, terminal, 'red_on_black')
         self.pr_bar = progressbar.ProgressBar(
             max_value=self.microseconds, widgets=widgets, fd=self.writer)
