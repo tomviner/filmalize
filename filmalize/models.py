@@ -163,7 +163,7 @@ class Container(EqualityMixin):
         self.labels = labels if labels else ContainerLabel()
 
         self.microseconds = int(duration * 1000000)
-        self.temp_file = tempfile.NamedTemporaryFile()
+        self.temp_file = tempfile.NamedTemporaryFile(delete=False)
         self.process = None
         self.equality_ignore = ['temp_file', 'process']
 
@@ -303,8 +303,13 @@ class Container(EqualityMixin):
         elif self.process.poll() is not None:
             raise ProgressFinishedError
         else:
-            with open(self.temp_file.name, 'r') as status:
-                line_list = status.readlines()
+            try:
+                self.temp_file.seek(-512, os.SEEK_END)
+            except OSError:
+                self.temp_file.seek(0)
+            binary_lines = self.temp_file.readlines(512)
+            line_list = [_l.decode().strip(os.linesep) for _l in binary_lines]
+
             microsec = 0
             for line in reversed(line_list):
                 if line.split('=')[0] == 'out_time_ms':
