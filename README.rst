@@ -1,6 +1,8 @@
 filmalize
 ---------
 
+.. image:: https://i.imgur.com/sziqYtB.png
+
 Named a `portmanteau word`_ composed of *film* and *standardize*,
 filmalize is a tool for standardizing a video library. filmalize is
 built with `Click`_ for python 3.4+ and also depends on the `bitmath`_,
