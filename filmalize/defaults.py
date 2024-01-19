@@ -1,7 +1,7 @@
 """Default global variables for filmalize."""
 
-FFPROBE = '/usr/bin/ffprobe'
-FFMPEG = '/usr/bin/ffmpeg'
+FFPROBE = 'ffprobe'
+FFMPEG = 'ffmpeg'
 ENDING = '.mp4'
 C_AUDIO = 'aac'
 C_VIDEO = 'h264'
